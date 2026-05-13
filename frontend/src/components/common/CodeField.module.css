@@ -1,0 +1,94 @@
+.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.labelRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.labelRow .line {
+  flex: 1;
+  height: 1px;
+  background: var(--rule);
+}
+
+.labelRow .note {
+  text-transform: lowercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.labelRow .note strong {
+  color: var(--text);
+  font-weight: 400;
+}
+
+.cells {
+  display: flex;
+  gap: 6px;
+}
+
+.cell {
+  flex: 1;
+  aspect-ratio: 1 / 1;
+  max-width: 56px;
+  background: var(--surf);
+  border: 1.5px solid var(--rule);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--mono);
+  font-size: 26px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.02em;
+  line-height: 1;
+  outline: 0;
+  text-align: center;
+  padding: 0;
+  caret-color: transparent;
+}
+
+.cell.active {
+  border-color: var(--green);
+}
+
+.cell.error {
+  border-color: var(--red);
+}
+
+.foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 0.06em;
+  margin-top: 2px;
+}
+
+.resend {
+  background: transparent;
+  border: 0;
+  color: var(--yellow);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  padding: 0;
+}
+
+.resend[disabled] {
+  color: var(--dim);
+  cursor: not-allowed;
+}

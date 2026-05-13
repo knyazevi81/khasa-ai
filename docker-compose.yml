@@ -1,0 +1,77 @@
+name: khasa
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: khasa-postgres
+    profiles: ["dev", "prod"]
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASS}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: khasa-mailhog
+    profiles: ["dev"]
+    ports:
+      - "8025:8025"  # web UI
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: ${BACKEND_TARGET:-dev}
+    container_name: khasa-backend
+    profiles: ["dev", "prod"]
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app:cached
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.presentation.fastapi.main:app --host 0.0.0.0 --port 8000 --reload"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: ${FRONTEND_TARGET:-dev}
+    container_name: khasa-frontend
+    profiles: ["dev", "prod"]
+    env_file: .env
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app:cached
+      - /app/node_modules
+      - /app/.next
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: khasa-nginx
+    profiles: ["dev", "prod"]
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+    depends_on:
+      - backend
+      - frontend
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

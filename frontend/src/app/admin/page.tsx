@@ -1,0 +1,304 @@
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { LogomarkSmall } from "@/components/common/Logomark";
+import { Button } from "@/components/common/Button";
+import { api, ApiHttpError } from "@/lib/api";
+import { useAuthStore } from "@/lib/auth-store";
+import type { UserDTO } from "@/lib/api-types";
+import { KHASA } from "@/styles/tokens";
+import styles from "./admin.module.css";
+
+type Tab = "pending" | "all";
+
+export default function AdminPage() {
+  const router = useRouter();
+  const { user, initialized, bootstrap, logout } = useAuthStore();
+
+  const [tab, setTab] = useState<Tab>("pending");
+  const [pending, setPending] = useState<UserDTO[] | null>(null);
+  const [all, setAll] = useState<UserDTO[] | null>(null);
+  const [notice, setNotice] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  const [acting, setActing] = useState<string | null>(null);
+
+  useEffect(() => {
+    bootstrap();
+  }, [bootstrap]);
+
+  useEffect(() => {
+    if (!initialized) return;
+    if (!user) {
+      router.replace("/auth/login");
+      return;
+    }
+    if (!user.is_superuser) {
+      router.replace("/chat");
+    }
+  }, [initialized, user, router]);
+
+  const loadPending = useCallback(async () => {
+    try {
+      const r = await api.users.pending();
+      setPending(r.users);
+    } catch (err) {
+      if (err instanceof ApiHttpError) {
+        setNotice({ kind: "err", text: err.detail });
+      }
+    }
+  }, []);
+
+  const loadAll = useCallback(async () => {
+    try {
+      const r = await api.users.all();
+      setAll(r.users);
+    } catch (err) {
+      if (err instanceof ApiHttpError) {
+        setNotice({ kind: "err", text: err.detail });
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    if (user?.is_superuser) {
+      loadPending();
+      loadAll();
+    }
+  }, [user, loadPending, loadAll]);
+
+  const activate = async (id: string, email: string) => {
+    setActing(id);
+    try {
+      await api.users.activate(id);
+      setNotice({ kind: "ok", text: `${email} активирован, письмо отправлено` });
+      await Promise.all([loadPending(), loadAll()]);
+    } catch (err) {
+      if (err instanceof ApiHttpError) {
+        setNotice({ kind: "err", text: err.detail });
+      }
+    } finally {
+      setActing(null);
+    }
+  };
+
+  const deactivate = async (id: string, email: string) => {
+    if (!confirm(`Деактивировать ${email}? Юзер не сможет войти.`)) return;
+    setActing(id);
+    try {
+      await api.users.deactivate(id);
+      setNotice({ kind: "ok", text: `${email} деактивирован` });
+      await loadAll();
+    } catch (err) {
+      if (err instanceof ApiHttpError) {
+        setNotice({ kind: "err", text: err.detail });
+      }
+    } finally {
+      setActing(null);
+    }
+  };
+
+  if (!initialized || !user || !user.is_superuser) {
+    return (
+      <div
+        style={{
+          minHeight: "100vh",
+          display: "grid",
+          placeItems: "center",
+          color: "var(--muted)",
+          fontFamily: "var(--mono)",
+          fontSize: 12,
+        }}
+      >
+        [runtime] проверка прав...
+      </div>
+    );
+  }
+
+  const rows: UserDTO[] = (tab === "pending" ? pending : all) ?? [];
+
+  return (
+    <div className={styles.root}>
+      <div className={styles.topbar}>
+        <LogomarkSmall />
+        <span className={styles.crumbs}>~/admin/</span>
+        <span className={styles.title}>users</span>
+        <span style={{ flex: 1 }} />
+        <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--muted)" }}>
+          {user.email}
+          <span style={{ color: KHASA.yellow, marginLeft: 8 }}>· admin</span>
+        </span>
+        <Link href="/chat">
+          <Button variant="ghost">в чат</Button>
+        </Link>
+        <Button
+          variant="ghost"
+          onClick={async () => {
+            await logout();
+            router.replace("/auth/login");
+          }}
+        >
+          выйти
+        </Button>
+      </div>
+
+      <div className={styles.tabs}>
+        <button
+          className={`${styles.tab} ${tab === "pending" ? styles.active : ""}`}
+          onClick={() => setTab("pending")}
+        >
+          <span>заявки</span>
+          {pending && <span className={styles.badge}>{pending.length}</span>}
+        </button>
+        <button
+          className={`${styles.tab} ${tab === "all" ? styles.active : ""}`}
+          onClick={() => setTab("all")}
+        >
+          <span>все пользователи</span>
+          {all && <span className={styles.badge}>{all.length}</span>}
+        </button>
+      </div>
+
+      <div className={styles.content}>
+        {notice && (
+          <div className={`${styles.notice} ${notice.kind === "err" ? styles.error : ""}`}>
+            <span
+              style={{
+                color: notice.kind === "ok" ? "var(--green)" : "var(--red)",
+                fontFamily: "var(--mono)",
+                fontWeight: 700,
+              }}
+            >
+              [{notice.kind === "ok" ? "ok" : "err"}]
+            </span>
+            <span>{notice.text}</span>
+            <span style={{ flex: 1 }} />
+            <button
+              className={styles.smallBtn}
+              onClick={() => setNotice(null)}
+            >
+              ×
+            </button>
+          </div>
+        )}
+
+        <div className={styles.headerRow}>
+          <h2>
+            {tab === "pending"
+              ? "// заявки на одобрение"
+              : "// все пользователи"}
+          </h2>
+          <span className={styles.meta}>
+            {tab === "pending" ? pending?.length ?? 0 : all?.length ?? 0} записей
+          </span>
+        </div>
+
+        {rows.length === 0 ? (
+          <div className={styles.empty}>
+            {tab === "pending"
+              ? "// очередь пуста — все заявки рассмотрены"
+              : "// пользователей пока нет"}
+          </div>
+        ) : (
+          <table className={styles.table}>
+            <thead>
+              <tr>
+                <th>email</th>
+                <th>email подтв.</th>
+                <th>активен</th>
+                <th>роль</th>
+                <th style={{ textAlign: "right" }}>действия</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((u) => {
+                const isMe = u.id === user.id;
+                return (
+                  <tr key={u.id}>
+                    <td style={{ color: "var(--text)" }}>{u.email}</td>
+                    <td>
+                      {u.is_email_verified ? (
+                        <span className={styles.pill}>
+                          <span
+                            className={styles.dot}
+                            style={{ background: KHASA.green }}
+                          />
+                          подтв.
+                        </span>
+                      ) : (
+                        <span className={styles.pill}>
+                          <span
+                            className={styles.dot}
+                            style={{ background: KHASA.red }}
+                          />
+                          нет
+                        </span>
+                      )}
+                    </td>
+                    <td>
+                      {u.is_active ? (
+                        <span className={styles.pill}>
+                          <span
+                            className={styles.dot}
+                            style={{ background: KHASA.green }}
+                          />
+                          активен
+                        </span>
+                      ) : (
+                        <span className={styles.pill}>
+                          <span
+                            className={styles.dot}
+                            style={{ background: KHASA.yellow }}
+                          />
+                          ожидание
+                        </span>
+                      )}
+                    </td>
+                    <td style={{ color: "var(--muted)" }}>
+                      {u.is_superuser ? (
+                        <span style={{ color: KHASA.yellow }}>superuser</span>
+                      ) : (
+                        "user"
+                      )}
+                    </td>
+                    <td>
+                      <div className={styles.actions}>
+                        {tab === "pending" && (
+                          <button
+                            className={`${styles.smallBtn} ${styles.primary}`}
+                            disabled={acting === u.id}
+                            onClick={() => activate(u.id, u.email)}
+                          >
+                            {acting === u.id ? "..." : "активировать"}
+                          </button>
+                        )}
+                        {tab === "all" && u.is_active && !isMe && (
+                          <button
+                            className={`${styles.smallBtn} ${styles.danger}`}
+                            disabled={acting === u.id}
+                            onClick={() => deactivate(u.id, u.email)}
+                          >
+                            деактивировать
+                          </button>
+                        )}
+                        {tab === "all" && !u.is_active && u.is_email_verified && (
+                          <button
+                            className={`${styles.smallBtn} ${styles.primary}`}
+                            disabled={acting === u.id}
+                            onClick={() => activate(u.id, u.email)}
+                          >
+                            активировать
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}

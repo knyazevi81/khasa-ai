@@ -1,0 +1,35 @@
+.wrap {
+  display: inline-flex;
+  flex-direction: column;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.dots {
+  display: flex;
+  flex-direction: column;
+}
+
+.dot {
+  display: block;
+}
+
+.text {
+  font-family: var(--mono);
+  font-weight: 700;
+  line-height: 0.85;
+  letter-spacing: -0.05em;
+  color: var(--text);
+}
+
+.caption {
+  font-family: var(--mono);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-top: 0.4em;
+}

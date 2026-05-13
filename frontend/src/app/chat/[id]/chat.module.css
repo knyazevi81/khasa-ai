@@ -1,0 +1,537 @@
+.loading {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--bg);
+}
+
+.page {
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 24px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.logoLink {
+  display: inline-flex;
+}
+
+.chatTitle {
+  font-family: var(--display);
+  font-size: 16px;
+  letter-spacing: -0.01em;
+}
+
+.metaSep {
+  color: var(--dim);
+}
+
+.chatMeta {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.userEmail {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.main {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr) 360px;
+  min-height: 0;
+}
+
+/* ── sidebar ─────────────────────────────────────────────────────────────── */
+
+.sidebar {
+  border-right: 1px solid var(--rule);
+  background: var(--surf);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sidebarHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.sidebarTitle {
+  font-family: var(--mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--dim);
+}
+
+.newLink {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--green);
+  text-decoration: none;
+}
+
+.newLink:hover {
+  text-decoration: underline;
+}
+
+.chatList {
+  list-style: none;
+  margin: 0;
+  padding: 8px 0;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.chatItem {
+  display: block;
+  padding: 10px 16px;
+  font-size: 12px;
+  color: var(--text);
+  text-decoration: none;
+  border-left: 2px solid transparent;
+  transition: background 120ms, border-color 120ms;
+}
+
+.chatItem:hover {
+  background: var(--raised);
+}
+
+.chatItemActive {
+  background: var(--raised);
+  border-left-color: var(--yellow);
+}
+
+/* ── conversation column ─────────────────────────────────────────────────── */
+
+.conversation {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--bg);
+}
+
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.emptyConvo {
+  margin: auto;
+  text-align: center;
+  color: var(--muted);
+}
+
+.emptyHint {
+  font-family: var(--mono);
+  font-size: 12px;
+  margin: 6px 0;
+}
+
+.inlineLink {
+  color: var(--yellow);
+}
+
+.message {
+  max-width: 760px;
+  width: 100%;
+  border: 1px solid var(--rule);
+  background: var(--surf);
+  padding: 14px 18px;
+}
+
+.role_user {
+  margin-left: auto;
+  border-color: var(--rule);
+  background: var(--raised);
+}
+
+.role_assistant {
+  margin-right: auto;
+  border-left: 2px solid var(--green);
+}
+
+.role_system {
+  margin: 0 auto;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+  border-color: var(--dim);
+  background: transparent;
+}
+
+.message[data-status="failed"] {
+  border-color: var(--red);
+}
+
+.messageHead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  font-family: var(--mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--dim);
+}
+
+.messageRole {
+  color: var(--text);
+}
+
+.role_assistant .messageRole {
+  color: var(--green);
+}
+
+.role_user .messageRole {
+  color: var(--yellow);
+}
+
+.messageModel {
+  color: var(--muted);
+}
+
+.streamDot {
+  color: var(--yellow);
+  animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.failedTag {
+  color: var(--red);
+}
+
+.messageContent {
+  font-size: 14px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+.caret {
+  display: inline-block;
+  width: 8px;
+  height: 14px;
+  background: var(--yellow);
+  vertical-align: text-bottom;
+  margin-left: 2px;
+  animation: blink 0.8s infinite;
+}
+
+@keyframes blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+
+.errorBox {
+  margin-top: 10px;
+  padding: 8px 10px;
+  background: rgba(200, 32, 43, 0.08);
+  border: 1px solid var(--red);
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--red);
+}
+
+.messageActions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--rule);
+}
+
+.actionButton {
+  background: transparent;
+  border: 1px solid var(--rule);
+  color: var(--muted);
+  padding: 4px 10px;
+  font-family: var(--mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+  transition: all 120ms;
+}
+
+.actionButton:hover:not(:disabled) {
+  color: var(--yellow);
+  border-color: var(--yellow);
+}
+
+.actionButton:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.branchSwitcher {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.branchLabel {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--dim);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.branchPill {
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--rule);
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  cursor: pointer;
+  transition: all 120ms;
+}
+
+.branchPill:hover {
+  border-color: var(--yellow);
+  color: var(--yellow);
+}
+
+.branchPillActive {
+  background: var(--yellow);
+  border-color: var(--yellow);
+  color: #000;
+}
+
+/* ── composer ────────────────────────────────────────────────────────────── */
+
+.composer {
+  border-top: 1px solid var(--rule);
+  padding: 16px 40px;
+  background: var(--surf);
+}
+
+.attachmentChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  margin-bottom: 10px;
+  background: var(--raised);
+  border: 1px solid var(--green);
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text);
+}
+
+.attachmentSize {
+  color: var(--muted);
+}
+
+.attachmentRemove {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 0 0 4px;
+}
+
+.attachmentRemove:hover {
+  color: var(--red);
+}
+
+.uploadError {
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--red);
+  background: rgba(200, 32, 43, 0.06);
+  border: 1px solid var(--red);
+}
+
+.composerRow {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.fileButton {
+  width: 40px;
+  background: transparent;
+  border: 1px solid var(--rule);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 16px;
+  transition: all 120ms;
+}
+
+.fileButton:hover:not(:disabled) {
+  color: var(--green);
+  border-color: var(--green);
+}
+
+.fileButton:disabled {
+  opacity: 0.4;
+  cursor: wait;
+}
+
+.textarea {
+  flex: 1;
+  resize: none;
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 14px;
+  padding: 10px 12px;
+  line-height: 1.5;
+}
+
+.textarea:focus {
+  outline: none;
+  border-color: var(--yellow);
+}
+
+.textarea:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.sendButton {
+  width: 56px;
+  background: var(--green);
+  border: 1px solid var(--green);
+  color: #fff;
+  font-family: var(--mono);
+  font-size: 16px;
+  cursor: pointer;
+  transition: all 120ms;
+}
+
+.sendButton:hover:not(:disabled) {
+  background: #258A47;
+}
+
+.sendButton:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+/* ── graph panel ─────────────────────────────────────────────────────────── */
+
+.graphPanel {
+  border-left: 1px solid var(--rule);
+  background: var(--bg);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── edit mode ───────────────────────────────────────────────────────────── */
+
+.editBox {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.editTextarea {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--yellow);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.5;
+  padding: 10px 12px;
+  resize: vertical;
+}
+
+.editTextarea:focus {
+  outline: none;
+  border-color: var(--yellow);
+}
+
+.editActions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.primaryButton {
+  color: var(--yellow);
+  border-color: var(--yellow);
+}
+
+.primaryButton:hover:not(:disabled) {
+  background: var(--yellow);
+  color: var(--bg);
+}
+
+.editHint {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--dim);
+  text-align: right;
+}
+
+/* ── agent toggle ────────────────────────────────────────────────────────── */
+
+.agentToggle {
+  background: transparent;
+  border: 1px solid var(--rule);
+  color: var(--muted);
+  padding: 6px 12px;
+  font-family: var(--mono);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 120ms;
+}
+
+.agentToggle:hover {
+  border-color: var(--yellow);
+  color: var(--yellow);
+}
+
+.agentToggleOn {
+  background: var(--yellow);
+  border-color: var(--yellow);
+  color: var(--bg);
+}
+
+.agentToggleOn:hover {
+  background: var(--yellow);
+  color: var(--bg);
+  opacity: 0.85;
+}

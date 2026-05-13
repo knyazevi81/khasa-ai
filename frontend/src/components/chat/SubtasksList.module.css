@@ -1,0 +1,50 @@
+.wrap {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-left: 2px solid var(--yellow);
+}
+
+.header {
+  font-family: var(--mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--yellow);
+  margin-bottom: 8px;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.icon {
+  width: 14px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.status_pending .icon { color: var(--dim); }
+.status_running .icon { color: var(--yellow); }
+.status_done    .icon { color: var(--green); }
+.status_failed  .icon { color: var(--red); }
+
+.title {
+  flex: 1;
+}
