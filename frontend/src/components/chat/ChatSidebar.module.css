@@ -1,0 +1,264 @@
+.sidebar {
+  width: 260px;
+  flex-shrink: 0;
+  height: 100vh;
+  background: var(--surf);
+  border-right: 1px solid var(--rule);
+  display: flex;
+  flex-direction: column;
+  font-family: var(--mono);
+}
+
+/* ── brand ───────────────────────────────────────────────────────────────── */
+
+.brand {
+  padding: 18px 18px 14px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.brandLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text);
+}
+
+/* ── new chat button ─────────────────────────────────────────────────────── */
+
+.newChat {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 14px 6px;
+  padding: 10px 12px;
+  background: var(--raised);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-md);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: all 120ms;
+}
+
+.newChat:hover:not(:disabled) {
+  border-color: var(--yellow);
+  background: rgba(232, 183, 26, 0.08);
+}
+
+.newChat:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
+.plus {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  background: var(--green);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  border-radius: var(--r-sm);
+  line-height: 1;
+}
+
+/* ── history list ────────────────────────────────────────────────────────── */
+
+.section {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  margin-top: 8px;
+}
+
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 18px;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.count {
+  background: var(--raised);
+  padding: 1px 6px;
+  border-radius: var(--r-sm);
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 0;
+}
+
+.empty {
+  padding: 18px;
+  font-size: 11px;
+  color: var(--dim);
+  text-align: center;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0 6px;
+  overflow-y: auto;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  margin-bottom: 2px;
+  border-radius: var(--r-md);
+  color: var(--muted);
+  font-family: var(--sans);
+  font-size: 13px;
+  line-height: 1.3;
+  text-decoration: none;
+  transition: all 100ms;
+  cursor: pointer;
+}
+
+.item:hover {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.itemActive {
+  background: var(--raised);
+  color: var(--text);
+  box-shadow: inset 2px 0 0 var(--yellow);
+}
+
+.itemTitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.itemAgent {
+  color: var(--yellow);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+/* ── profile panel ───────────────────────────────────────────────────────── */
+
+.profile {
+  position: relative;
+  margin-top: auto;
+  padding: 12px;
+  border-top: 1px solid var(--rule);
+}
+
+.profileButton {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+}
+
+.profileButton:hover {
+  background: var(--raised);
+  border-color: var(--rule);
+}
+
+.profileText {
+  flex: 1;
+  min-width: 0;
+}
+
+.profileEmail {
+  color: var(--text);
+  font-size: 12px;
+  font-family: var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profileRole {
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin-top: 2px;
+}
+
+.profileDots {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+/* ── profile menu (popover) ──────────────────────────────────────────────── */
+
+.profileMenu {
+  position: absolute;
+  bottom: calc(100% - 4px);
+  left: 12px;
+  right: 12px;
+  background: var(--raised);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-md);
+  padding: 6px;
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.menuItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  background: transparent;
+  border: none;
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 13px;
+  cursor: pointer;
+  text-decoration: none;
+  text-align: left;
+}
+
+.menuItem:hover {
+  background: var(--surf);
+}
+
+.menuItemDanger {
+  color: var(--red);
+}
+
+.menuIcon {
+  width: 16px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.menuItemDanger .menuIcon {
+  color: var(--red);
+}
+
+.menuRule {
+  height: 1px;
+  background: var(--rule);
+  margin: 4px 8px;
+}

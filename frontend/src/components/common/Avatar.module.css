@@ -1,0 +1,13 @@
+.av {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--raised);
+  color: var(--text);
+  font-family: var(--mono);
+  font-weight: 700;
+  border: 1px solid;
+  border-radius: var(--r-sm);
+  flex-shrink: 0;
+  user-select: none;
+}

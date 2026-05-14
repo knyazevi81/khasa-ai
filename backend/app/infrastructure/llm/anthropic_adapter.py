@@ -140,3 +140,36 @@ class AnthropicAdapter(AbstractLLMService):
                 return resp.status_code != 401
         except httpx.HTTPError:
             return False
+
+    async def list_models(self, credential: LLMCredential) -> list[str]:
+        """
+        Anthropic поддерживает GET /v1/models (с пагинацией). Запрашиваем
+        первую страницу, остальные нам не нужны для UI-селектора.
+        """
+        base = credential.base_url or self.DEFAULT_BASE
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    f"{base.rstrip('/')}/v1/models?limit=100",
+                    headers={
+                        "x-api-key": credential.secret,
+                        "anthropic-version": self.API_VERSION,
+                    },
+                )
+                if resp.status_code != 200:
+                    return _FALLBACK_ANTHROPIC
+                data = resp.json()
+                items = data.get("data") or []
+                return [m.get("id") for m in items if m.get("id")] or _FALLBACK_ANTHROPIC
+        except httpx.HTTPError:
+            return _FALLBACK_ANTHROPIC
+
+
+# Fallback-набор моделей если /v1/models недоступен (старые ключи, прокси)
+_FALLBACK_ANTHROPIC = [
+    "claude-opus-4-5",
+    "claude-sonnet-4-5",
+    "claude-haiku-4-5",
+    "claude-3-5-sonnet-latest",
+    "claude-3-5-haiku-latest",
+]

@@ -282,6 +282,103 @@ async def fork_message(
     return _to_message_response(msg)
 
 
+@router.get(
+    "/{chat_id}/export",
+    summary="Экспорт чата (активная ветка) в .md или .json",
+)
+async def export_chat(
+    chat_id: uuid.UUID,
+    current_user: Annotated[User, Depends(get_current_user)],
+    service: Annotated[ChatService, Depends(get_chat_service)],
+    format: str = "md",
+):
+    """
+    Возвращает активную ветку чата (путь от корня до current_message_id).
+    Формат:
+      • md   — markdown с разделителями и метаинформацией;
+      • json — структурированный объект {chat, messages[]}.
+    """
+    from fastapi import Response
+    from datetime import datetime, timezone
+    import json as _json
+
+    chat = await service.get_chat(chat_id, current_user.id)
+
+    if not chat.current_message_id:
+        # Пустой чат — отдаём пустой документ
+        if format == "json":
+            return Response(
+                content=_json.dumps(
+                    {"chat": {"id": str(chat.id), "title": chat.title}, "messages": []},
+                    ensure_ascii=False, indent=2,
+                ),
+                media_type="application/json",
+                headers={"Content-Disposition": f'attachment; filename="{chat.title}.json"'},
+            )
+        return Response(
+            content=f"# {chat.title}\n\n(пусто)\n",
+            media_type="text/markdown",
+            headers={"Content-Disposition": f'attachment; filename="{chat.title}.md"'},
+        )
+
+    # path-to-root по активному листу
+    path = await service.uow.messages.get_path_to_root(chat.current_message_id)
+    safe_title = "".join(c if c.isalnum() or c in "-_." else "_" for c in chat.title)[:60] or "chat"
+
+    if format == "json":
+        payload = {
+            "chat": {
+                "id": str(chat.id),
+                "title": chat.title,
+                "model": chat.model,
+                "exported_at": datetime.now(timezone.utc).isoformat(),
+            },
+            "messages": [
+                {
+                    "id": str(m.id),
+                    "role": m.role,
+                    "content": m.content,
+                    "model": m.model,
+                    "input_tokens": m.input_tokens,
+                    "output_tokens": m.output_tokens,
+                }
+                for m in path
+            ],
+        }
+        return Response(
+            content=_json.dumps(payload, ensure_ascii=False, indent=2),
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="{safe_title}.json"'},
+        )
+
+    # markdown
+    lines: list[str] = [f"# {chat.title}\n"]
+    if chat.model:
+        lines.append(f"_Model: `{chat.model}`_\n")
+    lines.append(f"_Exported: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}_\n")
+    lines.append("\n---\n\n")
+
+    for m in path:
+        role_label = {
+            "user": "👤 **You**",
+            "assistant": "🤖 **khasa**",
+            "system": "⚙ **System**",
+        }.get(m.role, m.role)
+        lines.append(f"## {role_label}\n\n")
+        lines.append(f"{m.content}\n\n")
+        if m.role == "assistant" and (m.input_tokens or m.output_tokens):
+            lines.append(
+                f"<sub>tokens: in {m.input_tokens} · out {m.output_tokens}</sub>\n\n"
+            )
+        lines.append("---\n\n")
+
+    return Response(
+        content="".join(lines),
+        media_type="text/markdown",
+        headers={"Content-Disposition": f'attachment; filename="{safe_title}.md"'},
+    )
+
+
 # ── WebSocket: стрим ассистента ──────────────────────────────────────────────
 # Протокол (вход):
 #   { "type": "send", "content": "...", "parent_id": null }
@@ -520,6 +617,10 @@ async def _pump_stream(websocket, chat_service, chat, assistant_msg_id):
         if event.type == StreamEventType.DELTA:
             await websocket.send_json(
                 {"type": "delta", "message_id": str(assistant_msg_id), "text": event.text}
+            )
+        elif event.type == StreamEventType.ARTIFACT:
+            await websocket.send_json(
+                {"type": "artifact", "artifact": event.raw}
             )
         elif event.type == StreamEventType.DONE:
             payload = {"type": "done", "message_id": str(assistant_msg_id)}

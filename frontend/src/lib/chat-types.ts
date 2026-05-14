@@ -65,9 +65,66 @@ export type WSIncoming =
   | { type: "assistant_message_created"; message: MessageDTO }
   | { type: "delta"; message_id: string; text: string }
   | { type: "done"; message_id: string; usage?: { input_tokens: number; output_tokens: number } }
-  | { type: "error"; message_id?: string; error: string };
+  | { type: "error"; message_id?: string; error: string }
+  | { type: "artifact"; artifact: ArtifactPushDTO };
 
 export type WSOutgoing =
   | { type: "send"; content: string; parent_id?: string | null }
   | { type: "regenerate"; from_assistant_message_id: string; branch_label?: string }
   | { type: "fork"; from_message_id: string; new_content: string; branch_label?: string };
+
+// ── Артефакты ────────────────────────────────────────────────────────────────
+
+export interface ArtifactDTO {
+  id: string;
+  chat_id: string;
+  slug: string;
+  kind: "markdown" | "code" | "html" | "svg" | "mermaid" | "json";
+  title: string;
+  language: string | null;
+  current_version_id: string | null;
+}
+
+export interface ArtifactVersionDTO {
+  id: string;
+  artifact_id: string;
+  version_no: number;
+  content: string;
+  message_id: string;
+}
+
+export interface ArtifactListDTO {
+  artifacts: ArtifactDTO[];
+  total: number;
+}
+
+export interface ArtifactDetailDTO {
+  artifact: ArtifactDTO;
+  versions: ArtifactVersionDTO[];
+}
+
+// WS-событие создания/обновления артефакта
+export interface ArtifactPushDTO {
+  artifact_id: string;
+  version_id: string;
+  slug: string;
+  kind: ArtifactDTO["kind"];
+  title: string;
+  language: string | null;
+}
+
+// ── Системные промпты ───────────────────────────────────────────────────────
+
+export interface SystemPromptDTO {
+  id: string;
+  title: string;
+  content: string;
+  description: string | null;
+  icon: string | null;
+  is_pinned: boolean;
+}
+
+export interface SystemPromptListDTO {
+  prompts: SystemPromptDTO[];
+  total: number;
+}

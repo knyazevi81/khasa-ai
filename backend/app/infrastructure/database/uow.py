@@ -2,6 +2,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.repositories.uow import AbstractUnitOfWork
 from app.infrastructure.database.engine import async_session_maker
+from app.infrastructure.database.repositories.artifacts import (
+    SQLArtifactRepository,
+    SQLArtifactVersionRepository,
+)
 from app.infrastructure.database.repositories.chat_extras import (
     SQLAgentSubtaskRepository,
     SQLAttachmentRepository,
@@ -11,6 +15,9 @@ from app.infrastructure.database.repositories.llm_credentials import (
     SQLLLMCredentialRepository,
 )
 from app.infrastructure.database.repositories.messages import SQLMessageRepository
+from app.infrastructure.database.repositories.system_prompts import (
+    SQLSystemPromptRepository,
+)
 from app.infrastructure.database.repositories.users import SQLUserRepository
 from app.infrastructure.database.repositories.verification_codes import (
     SQLVerificationCodeRepository,
@@ -30,6 +37,9 @@ class UnitOfWork(AbstractUnitOfWork):
     messages: SQLMessageRepository
     attachments: SQLAttachmentRepository
     agent_subtasks: SQLAgentSubtaskRepository
+    artifacts: SQLArtifactRepository
+    artifact_versions: SQLArtifactVersionRepository
+    system_prompts: SQLSystemPromptRepository
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -42,6 +52,9 @@ class UnitOfWork(AbstractUnitOfWork):
         self.messages = SQLMessageRepository(self.session)
         self.attachments = SQLAttachmentRepository(self.session)
         self.agent_subtasks = SQLAgentSubtaskRepository(self.session)
+        self.artifacts = SQLArtifactRepository(self.session)
+        self.artifact_versions = SQLArtifactVersionRepository(self.session)
+        self.system_prompts = SQLSystemPromptRepository(self.session)
         return self
 
     async def __aexit__(self, exc_type, *args) -> None:

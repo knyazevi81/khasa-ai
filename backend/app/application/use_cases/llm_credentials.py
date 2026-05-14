@@ -142,3 +142,10 @@ class LLMCredentialService:
         if not ok:
             raise InvalidCredentialError()
         return True
+
+    async def list_models(
+        self, credential_id: uuid.UUID, user_id: uuid.UUID
+    ) -> list[str]:
+        cred = await self.get_for_user(credential_id, user_id)
+        adapter = self.router.get(cred.provider.value)
+        return await adapter.list_models(cred)

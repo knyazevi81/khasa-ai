@@ -9,10 +9,12 @@ from app.infrastructure.config.config import get_settings
 from app.infrastructure.logging.setup import configure_logging
 from app.presentation.fastapi.middleware.exception import ExceptionMiddleware
 from app.presentation.fastapi.middleware.request_id import RequestIdMiddleware
+from app.presentation.fastapi.routers.artifacts import router as artifacts_router
 from app.presentation.fastapi.routers.auth import router as auth_router
 from app.presentation.fastapi.routers.chats import router as chats_router
 from app.presentation.fastapi.routers.llm import router as llm_router
 from app.presentation.fastapi.routers.ping import router as ping_router
+from app.presentation.fastapi.routers.system_prompts import router as system_prompts_router
 from app.presentation.fastapi.routers.users import router as users_router
 
 settings = get_settings()
@@ -52,6 +54,8 @@ def create_application() -> FastAPI:
     app.include_router(users_router, prefix=prefix)
     app.include_router(llm_router, prefix=prefix)
     app.include_router(chats_router, prefix=prefix)
+    app.include_router(artifacts_router, prefix=prefix)
+    app.include_router(system_prompts_router, prefix=prefix)
     app.include_router(ping_router, prefix=prefix)
 
     @app.get("/health/live")

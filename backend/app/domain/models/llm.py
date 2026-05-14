@@ -54,6 +54,9 @@ class StreamEventType(StrEnum):
     DELTA = "delta"
     DONE = "done"
     ERROR = "error"
+    # Эмитится use-case'ом (не адаптером): когда мы распарсили из стрима
+    # обновлённый артефакт. Полезная нагрузка в `raw`: {"artifact_id", ...}.
+    ARTIFACT = "artifact"
 
 
 class StreamEvent(BaseModel):

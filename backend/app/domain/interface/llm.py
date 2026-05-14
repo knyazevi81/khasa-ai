@@ -34,6 +34,14 @@ class AbstractLLMService(ABC):
         """Дешёвая проверка, что ключ/endpoint вообще работает."""
         ...
 
+    @abstractmethod
+    async def list_models(self, credential: LLMCredential) -> list[str]:
+        """
+        Возвращает список доступных моделей. Для адаптеров, где listing не
+        поддерживается, можно вернуть жёстко зашитый набор.
+        """
+        ...
+
 
 class AbstractLLMRouter(ABC):
     """Маршрутизатор: по `LLMProvider` отдаёт нужный адаптер."""

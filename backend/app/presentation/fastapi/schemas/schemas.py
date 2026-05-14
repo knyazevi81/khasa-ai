@@ -1,28 +1,59 @@
 from __future__ import annotations
 
 import uuid
+from typing import Annotated
 
-from pydantic import BaseModel, EmailStr, Field
+from email_validator import EmailNotValidError, validate_email
+from pydantic import AfterValidator, BaseModel, Field
+
+
+def _validate_email(value: str) -> str:
+    """
+    Лёгкая валидация e-mail с разрешением «специально-зарезервированных» TLD
+    (`.local`, `.test`, `.invalid`, `.localhost`). Это нужно чтобы первый
+    суперюзер с `admin@khasa.local` создавался без проблем — и при этом не
+    проваливать любую логику, которая загружает такого юзера из БД.
+    """
+    try:
+        result = validate_email(
+            value,
+            check_deliverability=False,
+            allow_smtputf8=True,
+            allow_quoted_local=False,
+        )
+        # Возвращаем нормализованный (lowercased domain) вариант
+        return result.normalized
+    except EmailNotValidError as exc:
+        msg = str(exc).lower()
+        # Если email-validator завернул только из-за special-use TLD —
+        # пропускаем такой адрес (для локальной разработки).
+        if "special-use" in msg or "reserved" in msg:
+            return value
+        raise ValueError(str(exc)) from exc
+
+
+# Аннотация-обёртка для всех мест где раньше был EmailStr
+EmailAddress = Annotated[str, AfterValidator(_validate_email)]
 
 
 # ── Auth / Registration ───────────────────────────────────────────────────────
 
 class RegisterRequest(BaseModel):
-    email: EmailStr
+    email: EmailAddress
     password: str = Field(min_length=8, max_length=128)
 
 
 class VerifyEmailRequest(BaseModel):
-    email: EmailStr
+    email: EmailAddress
     code: str = Field(min_length=4, max_length=10)
 
 
 class ResendCodeRequest(BaseModel):
-    email: EmailStr
+    email: EmailAddress
 
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    email: EmailAddress
     password: str = Field(min_length=1, max_length=128)
 
 
@@ -40,7 +71,7 @@ class TokenResponse(BaseModel):
 
 class UserResponse(BaseModel):
     id: uuid.UUID
-    email: EmailStr
+    email: str                              # уже нормализован
     is_active: bool
     is_email_verified: bool
     is_superuser: bool

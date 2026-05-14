@@ -103,3 +103,16 @@ async def validate_credential(
 ) -> MessageResponse:
     await service.validate(credential_id, current_user.id)
     return MessageResponse(message="Ключ валиден")
+
+
+@router.get(
+    "/{credential_id}/models",
+    summary="Список моделей провайдера",
+)
+async def list_models(
+    credential_id: uuid.UUID,
+    current_user: Annotated[User, Depends(get_current_user)],
+    service: Annotated[LLMCredentialService, Depends(get_llm_credential_service)],
+) -> dict:
+    models = await service.list_models(credential_id, current_user.id)
+    return {"models": models}

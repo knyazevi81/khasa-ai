@@ -5,14 +5,12 @@ export interface GraphNode {
   role: "user" | "assistant" | "system";
   status: MessageDTO["status"];
   parent_id: string | null;
-  depth: number;        // y-уровень в дереве
-  branchIndex: number;  // x-позиция в этой полосе
+  depth: number;        // x-уровень: сколько шагов от корня
+  branchIndex: number;  // 0 = main; 1, 2, ... = альтернативные ветки
   isCurrent: boolean;
   branchLabel: string | null;
-  // Координаты на холсте
-  x: number;
-  y: number;
-  // Для группировки UI: «индекс ветки» из всех листьев
+  x: number;            // pixel x
+  y: number;            // pixel y
   branchColor: string;
 }
 
@@ -28,21 +26,33 @@ export interface GraphLayout {
   height: number;
 }
 
+// Цветовая палитра веток: main = текст (нейтральный), alt-* = бренд-цвета.
+// Красный мы НЕ используем для веток — он зарезервирован под ошибки/role.
 const BRANCH_COLORS = [
-  "#1E7A3C", // green — main
-  "#E8B71A", // yellow — alt-a
-  "#C8202B", // red   — alt-b
-  "#8A8170", // muted — далее
+  "var(--text)",     // main
+  "var(--yellow)",   // alt-a
+  "var(--green)",    // alt-b
+  "var(--muted)",    // дальше
 ];
 
-const NODE_GAP_X = 110;
-const NODE_GAP_Y = 90;
-const NODE_PADDING = 60;
+const STEP_X = 150;
+const LANE_Y = 95;
+const PAD_X = 60;
+const PAD_Y = 70;
 
 /**
  * Раскладывает дерево сообщений в координаты для SVG.
- * Алгоритм: BFS от корня; для каждого узла высота = глубина (parent.depth+1),
- * x-позиция = текущая колонка в полосе уровня. Простой walk-based layout.
+ *
+ * Идеи:
+ *   • х растёт с глубиной (диалог разворачивается слева направо);
+ *   • main-ветка (первый ребёнок каждого parent) идёт по центральной полосе;
+ *   • альтернативные ветки разводятся вверх/вниз по «полосам».
+ *
+ * Алгоритм:
+ *   1) DFS считает depth каждого узла (расстояние от корня).
+ *   2) Каждому узлу присваиваем lane: у первого ребёнка = lane родителя,
+ *      у последующих детей — поочерёдно ±1, ±2 относительно lane родителя.
+ *   3) Конвертируем (depth, lane) → (x, y).
  */
 export function layoutGraph(
   messages: MessageDTO[],
@@ -52,67 +62,67 @@ export function layoutGraph(
     return { nodes: [], edges: [], width: 0, height: 0 };
   }
 
-  // Индекс по id и список детей по parent_id
-  const byId = new Map<string, MessageDTO>();
+  // Сообщения у нас уже упорядочены по created_at (бэкенд так возвращает),
+  // дети будут добавляться в порядке появления — это важно для разводки веток.
+  const byId = new Map(messages.map((m) => [m.id, m]));
   const children = new Map<string | null, string[]>();
   for (const m of messages) {
-    byId.set(m.id, m);
     const arr = children.get(m.parent_id) ?? [];
     arr.push(m.id);
     children.set(m.parent_id, arr);
   }
 
-  // Сортируем детей по created_at — это нам гарантирует API
-  // (find_for_chat order by created_at asc)
-
-  // Назначим каждому листу свой branchIndex; внутренним узлам — branchIndex
-  // первого ребёнка (чтобы main-ветка шла по центру).
-  const branchIndexOf = new Map<string, number>();
   const depthOf = new Map<string, number>();
+  const laneOf = new Map<string, number>();
+  const branchOf = new Map<string, number>();
 
-  // Найдём корни (parent_id === null)
-  const roots = children.get(null) ?? [];
-
-  // DFS, выдавая branchIndex по порядку обхода
-  let nextBranch = 0;
-
-  function dfs(id: string, depth: number): number {
+  function walk(id: string, depth: number, lane: number, branch: number) {
     depthOf.set(id, depth);
+    laneOf.set(id, lane);
+    branchOf.set(id, branch);
+
     const kids = children.get(id) ?? [];
-    if (kids.length === 0) {
-      const b = nextBranch++;
-      branchIndexOf.set(id, b);
-      return b;
-    }
-    let firstBranch = -1;
-    for (const kid of kids) {
-      const b = dfs(kid, depth + 1);
-      if (firstBranch < 0) firstBranch = b;
-    }
-    branchIndexOf.set(id, firstBranch);
-    return firstBranch;
+    // Первый ребёнок — продолжает текущую ветку
+    kids.forEach((kid, i) => {
+      if (i === 0) {
+        walk(kid, depth + 1, lane, branch);
+      } else {
+        // Альтернативные дети — разводятся ±1, ±2 от lane родителя
+        const offset = altOffset(i);
+        walk(kid, depth + 1, lane + offset, branch + i);
+      }
+    });
   }
 
-  for (const root of roots) dfs(root, 0);
+  // Корни (parent_id === null), главный — по центру (lane=0)
+  const roots = children.get(null) ?? [];
+  roots.forEach((rootId, i) => {
+    walk(rootId, 0, i === 0 ? 0 : altOffset(i), i);
+  });
 
-  // Когда у узла несколько детей — нужно их визуально разнести.
-  // Делаем простую "колонку на ветку": branchIndex напрямую = X-колонка.
+  // Найдём диапазон lanes чтобы сдвинуть к нулю
+  const lanes = [...laneOf.values()];
+  const minLane = Math.min(0, ...lanes);
+  const depths = [...depthOf.values()];
+  const maxDepth = Math.max(0, ...depths);
+
   const nodes: GraphNode[] = messages.map((m) => {
     const depth = depthOf.get(m.id) ?? 0;
-    const branchIndex = branchIndexOf.get(m.id) ?? 0;
-    const color = BRANCH_COLORS[branchIndex] ?? BRANCH_COLORS[BRANCH_COLORS.length - 1];
+    const lane = laneOf.get(m.id) ?? 0;
+    const branch = branchOf.get(m.id) ?? 0;
+    const color = BRANCH_COLORS[Math.min(branch, BRANCH_COLORS.length - 1)];
     return {
       id: m.id,
       role: m.role,
       status: m.status,
       parent_id: m.parent_id,
       depth,
-      branchIndex,
+      branchIndex: branch,
       isCurrent: m.id === currentMessageId,
       branchLabel: m.branch_label,
       branchColor: color,
-      x: NODE_PADDING + branchIndex * NODE_GAP_X,
-      y: NODE_PADDING + depth * NODE_GAP_Y,
+      x: PAD_X + depth * STEP_X,
+      y: PAD_Y + (lane - minLane) * LANE_Y,
     };
   });
 
@@ -121,13 +131,18 @@ export function layoutGraph(
     if (m.parent_id) edges.push({ fromId: m.parent_id, toId: m.id });
   }
 
-  const maxBranch = Math.max(0, ...nodes.map((n) => n.branchIndex));
-  const maxDepth = Math.max(0, ...nodes.map((n) => n.depth));
+  const width = PAD_X * 2 + maxDepth * STEP_X + 40;
+  const height = PAD_Y * 2 + (Math.max(...lanes) - minLane + 1) * LANE_Y;
 
-  return {
-    nodes,
-    edges,
-    width: NODE_PADDING * 2 + maxBranch * NODE_GAP_X + 40,
-    height: NODE_PADDING * 2 + maxDepth * NODE_GAP_Y + 40,
-  };
+  return { nodes, edges, width, height };
+}
+
+/**
+ * Смещение полосы для i-го альтернативного ребёнка:
+ * 1 → +1, 2 → -1, 3 → +2, 4 → -2, ...
+ */
+function altOffset(i: number): number {
+  const sign = i % 2 === 1 ? 1 : -1;
+  const magnitude = Math.ceil(i / 2);
+  return sign * magnitude;
 }

@@ -2,9 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
-import { LogomarkSmall } from "@/components/common/Logomark";
-import { Button } from "@/components/common/Button";
+import { ChatSidebar } from "@/components/chat/ChatSidebar";
 import { api, ApiHttpError } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import type { UserDTO } from "@/lib/api-types";
@@ -15,7 +13,7 @@ type Tab = "pending" | "all";
 
 export default function AdminPage() {
   const router = useRouter();
-  const { user, initialized, bootstrap, logout } = useAuthStore();
+  const { user, initialized, bootstrap } = useAuthStore();
 
   const [tab, setTab] = useState<Tab>("pending");
   const [pending, setPending] = useState<UserDTO[] | null>(null);
@@ -44,7 +42,9 @@ export default function AdminPage() {
       setPending(r.users);
     } catch (err) {
       if (err instanceof ApiHttpError) {
-        setNotice({ kind: "err", text: err.detail });
+        setNotice({ kind: "err", text: `${err.status}: ${err.detail}` });
+      } else {
+        setNotice({ kind: "err", text: String(err) });
       }
     }
   }, []);
@@ -55,7 +55,9 @@ export default function AdminPage() {
       setAll(r.users);
     } catch (err) {
       if (err instanceof ApiHttpError) {
-        setNotice({ kind: "err", text: err.detail });
+        setNotice({ kind: "err", text: `${err.status}: ${err.detail}` });
+      } else {
+        setNotice({ kind: "err", text: String(err) });
       }
     }
   }, []);
@@ -75,7 +77,9 @@ export default function AdminPage() {
       await Promise.all([loadPending(), loadAll()]);
     } catch (err) {
       if (err instanceof ApiHttpError) {
-        setNotice({ kind: "err", text: err.detail });
+        setNotice({ kind: "err", text: `${err.status}: ${err.detail}` });
+      } else {
+        setNotice({ kind: "err", text: String(err) });
       }
     } finally {
       setActing(null);
@@ -91,7 +95,9 @@ export default function AdminPage() {
       await loadAll();
     } catch (err) {
       if (err instanceof ApiHttpError) {
-        setNotice({ kind: "err", text: err.detail });
+        setNotice({ kind: "err", text: `${err.status}: ${err.detail}` });
+      } else {
+        setNotice({ kind: "err", text: String(err) });
       }
     } finally {
       setActing(null);
@@ -118,29 +124,19 @@ export default function AdminPage() {
   const rows: UserDTO[] = (tab === "pending" ? pending : all) ?? [];
 
   return (
-    <div className={styles.root}>
-      <div className={styles.topbar}>
-        <LogomarkSmall />
-        <span className={styles.crumbs}>~/admin/</span>
-        <span className={styles.title}>users</span>
-        <span style={{ flex: 1 }} />
-        <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--muted)" }}>
-          {user.email}
-          <span style={{ color: KHASA.yellow, marginLeft: 8 }}>· admin</span>
-        </span>
-        <Link href="/chat">
-          <Button variant="ghost">в чат</Button>
-        </Link>
-        <Button
-          variant="ghost"
-          onClick={async () => {
-            await logout();
-            router.replace("/auth/login");
-          }}
-        >
-          выйти
-        </Button>
-      </div>
+    <div className={styles.layout}>
+      <ChatSidebar />
+
+      <div className={styles.root}>
+        <div className={styles.topbar}>
+          <span className={styles.crumbs}>~/admin/</span>
+          <span className={styles.title}>users</span>
+          <span style={{ flex: 1 }} />
+          <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--muted)" }}>
+            {user.email}
+            <span style={{ color: KHASA.yellow, marginLeft: 8 }}>· admin</span>
+          </span>
+        </div>
 
       <div className={styles.tabs}>
         <button
@@ -298,6 +294,7 @@ export default function AdminPage() {
             </tbody>
           </table>
         )}
+      </div>
       </div>
     </div>
   );

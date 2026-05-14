@@ -3,20 +3,17 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { ChatSidebar } from "@/components/chat/ChatSidebar";
 import { Logomark } from "@/components/common/Logomark";
-import { Button } from "@/components/common/Button";
 import { useAuthStore } from "@/lib/auth-store";
 import { api } from "@/lib/api";
-import type { ChatDTO } from "@/lib/chat-types";
-import styles from "./chat-list.module.css";
+import styles from "./welcome.module.css";
 
-export default function ChatList() {
+export default function ChatWelcome() {
   const router = useRouter();
-  const { user, initialized, bootstrap, logout } = useAuthStore();
-  const [chats, setChats] = useState<ChatDTO[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { user, initialized, bootstrap } = useAuthStore();
+  const [hasCredentials, setHasCredentials] = useState<boolean | null>(null);
   const [creating, setCreating] = useState(false);
-  const [hasCredentials, setHasCredentials] = useState(false);
 
   useEffect(() => {
     bootstrap();
@@ -28,18 +25,7 @@ export default function ChatList() {
 
   useEffect(() => {
     if (!user) return;
-    (async () => {
-      try {
-        const [chatList, credList] = await Promise.all([
-          api.chats.list(),
-          api.llm.list(),
-        ]);
-        setChats(chatList.chats);
-        setHasCredentials(credList.total > 0);
-      } finally {
-        setLoading(false);
-      }
-    })();
+    api.llm.list().then((r) => setHasCredentials(r.total > 0));
   }, [user]);
 
   async function createChat() {
@@ -51,10 +37,14 @@ export default function ChatList() {
     try {
       const creds = await api.llm.list();
       const first = creds.credentials.find((c) => c.is_active);
+      if (!first) {
+        router.push("/settings");
+        return;
+      }
       const chat = await api.chats.create({
         title: "Новый чат",
-        credential_id: first?.id ?? null,
-        model: first?.default_model ?? null,
+        credential_id: first.id,
+        model: first.default_model ?? null,
       });
       router.push(`/chat/${chat.id}`);
     } finally {
@@ -62,87 +52,51 @@ export default function ChatList() {
     }
   }
 
-  if (!initialized || !user || loading) {
-    return <div className={styles.loading}>[runtime] загрузка...</div>;
+  if (!initialized || !user) {
+    return <div className={styles.loading}>[runtime] загрузка…</div>;
   }
 
   return (
-    <div className={styles.page}>
-      <header className={styles.header}>
-        <Logomark size={28} caption={false} />
-        <span style={{ flex: 1 }} />
-        <span className={styles.userEmail}>
-          {user.email}
-          {user.is_superuser && <span className={styles.adminBadge}> · admin</span>}
-        </span>
-        <Link href="/settings">
-          <Button variant="ghost">настройки</Button>
-        </Link>
-        {user.is_superuser && (
-          <Link href="/admin">
-            <Button variant="ghost">админ</Button>
-          </Link>
-        )}
-        <Button
-          variant="ghost"
-          onClick={async () => {
-            await logout();
-            router.replace("/auth/login");
-          }}
-        >
-          выйти
-        </Button>
-      </header>
+    <div className={styles.layout}>
+      <ChatSidebar />
 
       <main className={styles.main}>
-        <div className={styles.sidebar}>
-          <div className={styles.sidebarHeader}>
-            <span className={styles.sidebarTitle}>// чаты</span>
-            <button
-              className={styles.newButton}
-              onClick={createChat}
-              disabled={creating}
-            >
-              + новый
-            </button>
-          </div>
-          {chats.length === 0 ? (
-            <div className={styles.emptyList}>
-              <p>пока пусто</p>
-              <p className={styles.hint}>
-                {hasCredentials
-                  ? "создайте первый чат →"
-                  : "сначала добавьте ключ LLM в настройках"}
-              </p>
-            </div>
-          ) : (
-            <ul className={styles.chatList}>
-              {chats.map((c) => (
-                <li key={c.id}>
-                  <Link href={`/chat/${c.id}`} className={styles.chatItem}>
-                    <span className={styles.chatTitle}>{c.title}</span>
-                    {c.model && <span className={styles.chatModel}>{c.model}</span>}
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-
-        <div className={styles.welcome}>
-          <Logomark size={96} />
-          <h1 className={styles.welcomeTitle}>
+        <div className={styles.center}>
+          <Logomark size={88} />
+          <h1 className={styles.title}>
             С чего <span className={styles.accent}>начнём</span>?
           </h1>
-          <p className={styles.welcomeText}>
-            {hasCredentials
-              ? "Выберите чат слева или создайте новый. Граф диалога — справа от сообщений, ветки переключаются кликом."
-              : "Для начала добавьте API-ключ LLM в настройках. Поддерживаются Claude, OpenAI и локальный Ollama."}
-          </p>
-          {!hasCredentials && (
-            <Link href="/settings">
-              <Button variant="green">открыть настройки</Button>
-            </Link>
+
+          {hasCredentials === null ? (
+            <p className={styles.hint}>// загрузка…</p>
+          ) : hasCredentials ? (
+            <>
+              <p className={styles.hint}>
+                выберите чат слева или создайте новый
+              </p>
+              <button
+                className={styles.cta}
+                onClick={createChat}
+                disabled={creating}
+              >
+                <span className={styles.ctaPlus}>+</span>
+                {creating ? "создаём…" : "новый чат"}
+              </button>
+            </>
+          ) : (
+            <>
+              <p className={styles.hint}>
+                сначала добавьте ключ LLM
+                <br />
+                <span className={styles.hintMuted}>
+                  поддерживаются Claude, OpenAI и локальный Ollama
+                </span>
+              </p>
+              <Link href="/settings" className={styles.cta}>
+                <span className={styles.ctaPlus}>⚙</span>
+                открыть настройки
+              </Link>
+            </>
           )}
         </div>
       </main>

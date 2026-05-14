@@ -17,6 +17,9 @@ import type {
   UsersListDTO,
 } from "./api-types";
 import type {
+  ArtifactDTO,
+  ArtifactDetailDTO,
+  ArtifactListDTO,
   ChatDTO,
   ChatsListDTO,
   LLMCredentialDTO,
@@ -24,6 +27,8 @@ import type {
   MessageDTO as ChatMessageDTO,
   MessagesListDTO,
   ParsedFileDTO,
+  SystemPromptDTO,
+  SystemPromptListDTO,
 } from "./chat-types";
 
 const BASE = process.env.NEXT_PUBLIC_API_URL || "/api";
@@ -236,6 +241,10 @@ export const api = {
         method: "POST",
         auth: true,
       }),
+    models: (id: string) =>
+      request<{ models: string[] }>(`/llm/credentials/${id}/models`, {
+        auth: true,
+      }),
   },
 
   chats: {
@@ -286,6 +295,30 @@ export const api = {
           status: "pending" | "running" | "done" | "failed";
         }>;
       }>(`/chats/${chatId}/messages/${messageId}/subtasks`, { auth: true }),
+
+    // ── Артефакты ────────────────────────────────────────────────────────
+    artifacts: (chatId: string) =>
+      request<ArtifactListDTO>(`/chats/${chatId}/artifacts`, { auth: true }),
+    artifact: (chatId: string, artifactId: string) =>
+      request<ArtifactDetailDTO>(
+        `/chats/${chatId}/artifacts/${artifactId}`,
+        { auth: true },
+      ),
+    setArtifactVersion: (chatId: string, artifactId: string, versionId: string) =>
+      request<ArtifactDTO>(
+        `/chats/${chatId}/artifacts/${artifactId}/set-version`,
+        { method: "POST", body: { version_id: versionId }, auth: true },
+      ),
+
+    // ── Экспорт ──────────────────────────────────────────────────────────
+    exportUrl: (chatId: string, format: "md" | "json"): string => {
+      const token = tokenStorage.access;
+      // Скачивание идёт прямым navigate'ом — пробросим токен в query
+      const u = new URL(`${BASE}/v1/chats/${chatId}/export`, window.location.origin);
+      u.searchParams.set("format", format);
+      if (token) u.searchParams.set("access_token", token);
+      return u.toString();
+    },
   },
 
   files: {
@@ -308,6 +341,41 @@ export const api = {
       }
       return resp.json();
     },
+  },
+
+  prompts: {
+    list: () => request<SystemPromptListDTO>("/system-prompts/", { auth: true }),
+    create: (body: {
+      title: string;
+      content: string;
+      description?: string | null;
+      icon?: string | null;
+    }) =>
+      request<SystemPromptDTO>("/system-prompts/", {
+        method: "POST",
+        body,
+        auth: true,
+      }),
+    update: (
+      id: string,
+      body: Partial<{
+        title: string;
+        content: string;
+        description: string | null;
+        icon: string | null;
+        is_pinned: boolean;
+      }>,
+    ) =>
+      request<SystemPromptDTO>(`/system-prompts/${id}`, {
+        method: "PATCH",
+        body,
+        auth: true,
+      }),
+    delete: (id: string) =>
+      request<MessageDTO>(`/system-prompts/${id}`, {
+        method: "DELETE",
+        auth: true,
+      }),
   },
 };
 

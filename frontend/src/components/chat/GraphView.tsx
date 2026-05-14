@@ -10,24 +10,29 @@ interface Props {
   currentMessageId: string | null;
   onNodeClick?: (messageId: string) => void;
   onNodeContextMenu?: (e: React.MouseEvent, messageId: string) => void;
+  /** Если true — рендер компактнее (миниатюра в углу) */
+  compact?: boolean;
+  /** Если true — не показывать легенду и подписи (для миниатюры) */
+  minimal?: boolean;
 }
 
 /**
- * SVG-граф диалога. Узлы — кружки разного типа в зависимости от role:
- *   user      = квадрат
- *   assistant = круг
- *   system    = ромб
- * Цвет берётся из «полосы ветки» (см. graph-layout.ts).
- * Активный узел (current_message_id) обведён большим контуром.
+ * SVG-граф диалога, стилизованный под `khasa-dark.jsx`:
+ *   • кривые Безье между узлами (мягкие S-образные изгибы)
+ *   • main = solid + цвет текста, alt-* = пунктир + бренд-цвет
+ *   • активный узел — кольцо вокруг с opacity 0.4 + метка NOW внутри
+ *   • подпись узла справа (только не в minimal-режиме)
+ *   • сетка на фоне для глубины
  *
- * Левый клик по узлу — switch активной ветки.
- * Правый клик по узлу — открыть форк (новое user-сообщение от этого узла).
+ * Юзер-узел = квадрат, ассистент = круг.
  */
 export function GraphView({
   messages,
   currentMessageId,
   onNodeClick,
   onNodeContextMenu,
+  compact = false,
+  minimal = false,
 }: Props) {
   const layout = useMemo(
     () => layoutGraph(messages, currentMessageId),
@@ -37,187 +42,195 @@ export function GraphView({
   if (messages.length === 0) {
     return (
       <div className={styles.wrap}>
-        <div className={styles.empty}>
-          // граф пуст — начните диалог
-        </div>
+        <div className={styles.empty}>// граф пуст — начните диалог</div>
       </div>
     );
   }
 
+  const width = Math.max(layout.width, compact ? 280 : 600);
+  const height = Math.max(layout.height + 30, compact ? 220 : 400);
+  const nodeRadius = compact ? 6 : 11;
+  const ringRadius = nodeRadius + (compact ? 5 : 8);
+
   return (
     <div className={styles.wrap}>
-      <div className={styles.legend}>
-        <span>// граф диалога</span>
-        <span className={styles.item}>
-          <span className={styles.swatch} style={{ background: "var(--green)" }} />
-          main
-        </span>
-        <span className={styles.item}>
-          <span className={styles.swatch} style={{ background: "var(--yellow)" }} />
-          alt
-        </span>
-        <span className={styles.item}>
-          <span className={styles.swatch} style={{ background: "var(--red)" }} />
-          alt
-        </span>
-      </div>
-
-      <div
-        className={styles.canvas}
-        style={{
-          width: Math.max(layout.width, 600),
-          height: Math.max(layout.height, 400),
-        }}
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        className={styles.svg}
+        preserveAspectRatio="xMidYMid meet"
       >
-        <svg
-          className={styles.svg}
-          width={Math.max(layout.width, 600)}
-          height={Math.max(layout.height, 400)}
-        >
-          {/* Рёбра */}
-          {layout.edges.map((e) => {
-            const from = layout.nodes.find((n) => n.id === e.fromId);
-            const to = layout.nodes.find((n) => n.id === e.toId);
-            if (!from || !to) return null;
-            return (
-              <line
-                key={`${e.fromId}-${e.toId}`}
-                x1={from.x}
-                y1={from.y}
-                x2={to.x}
-                y2={to.y}
-                stroke={to.branchColor}
-                strokeOpacity={0.35}
-                strokeWidth={1.5}
-              />
-            );
-          })}
+        <defs>
+          <pattern
+            id="grid-d"
+            width={compact ? 16 : 32}
+            height={compact ? 16 : 32}
+            patternUnits="userSpaceOnUse"
+          >
+            <path
+              d={`M ${compact ? 16 : 32} 0 L 0 0 0 ${compact ? 16 : 32}`}
+              fill="none"
+              stroke="rgba(255,255,255,0.03)"
+              strokeWidth="1"
+            />
+          </pattern>
+        </defs>
+        <rect width={width} height={height} fill="url(#grid-d)" />
 
-          {/* Узлы */}
-          {layout.nodes.map((n) => {
-            const isActive = n.id === currentMessageId;
-            const stroke = n.branchColor;
-            const fill =
-              n.role === "user" ? "var(--surf)" : isActive ? n.branchColor : "var(--bg)";
-            const textColor = n.role === "user" || isActive ? "#fff" : n.branchColor;
+        {/* Рёбра (кривые Безье) */}
+        {layout.edges.map((e) => {
+          const from = layout.nodes.find((n) => n.id === e.fromId);
+          const to = layout.nodes.find((n) => n.id === e.toId);
+          if (!from || !to) return null;
+          const isMain = to.branchIndex === 0;
+          const stroke = to.branchColor;
+          // S-образная кривая через две контрольные точки
+          const mx = (from.x + to.x) / 2;
+          return (
+            <path
+              key={`${e.fromId}-${e.toId}`}
+              d={`M ${from.x} ${from.y} C ${mx} ${from.y}, ${mx} ${to.y}, ${to.x} ${to.y}`}
+              stroke={stroke}
+              strokeWidth={isMain ? 2 : 1.5}
+              strokeDasharray={isMain ? undefined : "4 4"}
+              fill="none"
+              opacity={isMain ? 0.9 : 0.7}
+            />
+          );
+        })}
 
-            const dim =
-              n.status === "pending" || n.status === "streaming" ? 0.7 : 1;
+        {/* Узлы */}
+        {layout.nodes.map((n) => {
+          const isActive = n.id === currentMessageId;
+          const isUser = n.role === "user";
+          const isMain = n.branchIndex === 0;
+          const stroke = n.branchColor;
+          const fill = isActive
+            ? stroke
+            : isMain
+              ? "var(--surf)"
+              : "transparent";
+          const r = isActive ? nodeRadius + 5 : nodeRadius;
+          const labelText = labelFor(messages, n.id);
+          const labelDisplay = truncate(labelText, compact ? 12 : 18);
+          const labelWidth = Math.max(40, labelDisplay.length * (compact ? 5.5 : 6.5) + 10);
 
-            return (
-              <g
-                key={n.id}
-                className={styles.node}
-                onClick={() => onNodeClick?.(n.id)}
-                onContextMenu={(e) => onNodeContextMenu?.(e, n.id)}
-                style={{ opacity: dim }}
-              >
-                {/* Активный узел — внешнее кольцо */}
-                {isActive && (
-                  <circle
-                    cx={n.x}
-                    cy={n.y}
-                    r={22}
-                    fill="none"
-                    stroke={stroke}
-                    strokeWidth={1.5}
-                    strokeDasharray="3 3"
-                  />
-                )}
+          return (
+            <g
+              key={n.id}
+              className={styles.node}
+              transform={`translate(${n.x}, ${n.y})`}
+              onClick={() => onNodeClick?.(n.id)}
+              onContextMenu={(e) => onNodeContextMenu?.(e, n.id)}
+              style={{ opacity: n.status === "pending" ? 0.5 : 1 }}
+            >
+              {/* Кольцо вокруг активного */}
+              {isActive && (
+                <circle
+                  r={ringRadius}
+                  fill="none"
+                  stroke={stroke}
+                  strokeWidth={1.5}
+                  opacity={0.4}
+                />
+              )}
 
-                {n.role === "user" ? (
-                  <rect
-                    className={styles.nodeBg}
-                    x={n.x - 14}
-                    y={n.y - 14}
-                    width={28}
-                    height={28}
-                    fill={fill}
-                    stroke={stroke}
-                    strokeWidth={1.5}
-                  />
-                ) : n.role === "system" ? (
-                  <polygon
-                    className={styles.nodeBg}
-                    points={`${n.x},${n.y - 16} ${n.x + 16},${n.y} ${n.x},${n.y + 16} ${n.x - 16},${n.y}`}
-                    fill={fill}
-                    stroke={stroke}
-                    strokeWidth={1.5}
-                  />
-                ) : (
-                  <circle
-                    className={styles.nodeBg}
-                    cx={n.x}
-                    cy={n.y}
-                    r={14}
-                    fill={fill}
-                    stroke={stroke}
-                    strokeWidth={1.5}
-                  />
-                )}
+              {isUser ? (
+                <rect
+                  x={-r}
+                  y={-r}
+                  width={r * 2}
+                  height={r * 2}
+                  rx={1}
+                  fill={fill}
+                  stroke={stroke}
+                  strokeWidth={1.5}
+                />
+              ) : (
+                <circle
+                  r={r}
+                  fill={fill}
+                  stroke={stroke}
+                  strokeWidth={2}
+                />
+              )}
 
+              {isActive && !compact && (
                 <text
-                  x={n.x}
-                  y={n.y + 4}
                   textAnchor="middle"
+                  dy={4}
+                  fill="var(--bg)"
                   fontFamily="var(--mono)"
-                  fontSize={10}
+                  fontSize={9}
                   fontWeight={700}
-                  fill={textColor}
                   style={{ pointerEvents: "none" }}
                 >
-                  {n.role === "user" ? "U" : n.role === "system" ? "S" : "A"}
+                  NOW
                 </text>
+              )}
 
-                {/* Подпись ветки рядом с узлом */}
-                {n.branchLabel && (
-                  <text
-                    x={n.x + 22}
-                    y={n.y + 4}
-                    fontFamily="var(--mono)"
-                    fontSize={9}
-                    fill={n.branchColor}
-                    style={{ pointerEvents: "none" }}
-                  >
-                    {n.branchLabel}
-                  </text>
-                )}
+              {/* Стрим-индикатор */}
+              {n.status === "streaming" && (
+                <circle
+                  cx={r + 4}
+                  cy={-r - 2}
+                  r={2.5}
+                  fill="var(--yellow)"
+                >
+                  <animate
+                    attributeName="opacity"
+                    values="0.3;1;0.3"
+                    dur="1s"
+                    repeatCount="indefinite"
+                  />
+                </circle>
+              )}
 
-                {/* Индикатор стрима */}
-                {n.status === "streaming" && (
-                  <circle
-                    cx={n.x + 14}
-                    cy={n.y - 14}
-                    r={3}
-                    fill="var(--yellow)"
-                  >
-                    <animate
-                      attributeName="opacity"
-                      from="0.3"
-                      to="1"
-                      dur="0.8s"
-                      repeatCount="indefinite"
-                    />
-                  </circle>
-                )}
-                {n.status === "failed" && (
+              {/* Подпись под узлом — небольшая, с подложкой чтобы не сливаться */}
+              {!minimal && labelText && (
+                <g style={{ pointerEvents: "none" }}>
+                  <rect
+                    x={-labelWidth / 2}
+                    y={r + 6}
+                    width={labelWidth}
+                    height={16}
+                    rx={3}
+                    fill="var(--bg)"
+                    stroke="var(--rule)"
+                    strokeWidth={1}
+                    opacity={0.92}
+                  />
                   <text
-                    x={n.x + 18}
-                    y={n.y - 12}
+                    x={0}
+                    y={r + 17}
+                    textAnchor="middle"
+                    fill="var(--text)"
                     fontFamily="var(--mono)"
-                    fontSize={10}
-                    fill="var(--red)"
-                    fontWeight={700}
-                    style={{ pointerEvents: "none" }}
+                    fontSize={compact ? 9 : 10}
                   >
-                    !
+                    {labelDisplay}
                   </text>
-                )}
-              </g>
-            );
-          })}
-        </svg>
-      </div>
+                </g>
+              )}
+            </g>
+          );
+        })}
+      </svg>
     </div>
   );
+}
+
+// ── helpers ──────────────────────────────────────────────────────────────────
+
+function labelFor(messages: MessageDTO[], id: string): string {
+  const m = messages.find((x) => x.id === id);
+  if (!m) return "";
+  const text = (m.content || "").replace(/```[\s\S]*?```/g, "").trim();
+  if (!text) {
+    return m.role === "assistant" ? "[стрим]" : "[пусто]";
+  }
+  return text.split("\n")[0].slice(0, 60);
+}
+
+function truncate(s: string, n: number): string {
+  return s.length <= n ? s : s.slice(0, n - 1) + "…";
 }

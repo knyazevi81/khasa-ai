@@ -5,6 +5,7 @@
   gap: 12px;
   padding: 13px 22px;
   border: 0;
+  border-radius: var(--r-md);
   font-family: var(--mono);
   font-size: 13px;
   font-weight: 700;

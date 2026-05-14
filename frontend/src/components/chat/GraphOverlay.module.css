@@ -1,0 +1,137 @@
+.scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(2px);
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  animation: scrimIn 140ms ease;
+}
+
+@keyframes scrimIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.window {
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-lg);
+  width: min(1100px, 95vw);
+  height: min(720px, 90vh);
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6);
+  animation: windowIn 180ms ease;
+}
+
+@keyframes windowIn {
+  from { transform: translateY(8px) scale(0.98); opacity: 0; }
+  to   { transform: translateY(0)     scale(1);    opacity: 1; }
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--rule);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  display: inline-block;
+}
+
+.title {
+  color: var(--text);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-weight: 700;
+}
+
+.divider {
+  color: var(--dim);
+}
+
+.subtitle {
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.hint {
+  color: var(--dim);
+  letter-spacing: 0.04em;
+}
+
+.close {
+  width: 28px;
+  height: 28px;
+  background: var(--surf);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-sm);
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  transition: all 100ms;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.close:hover {
+  color: var(--red);
+  border-color: var(--red);
+}
+
+.canvas {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.legend {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--rule);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.legendItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.swatch {
+  width: 18px;
+  height: 2px;
+}
+
+.swatchSq {
+  width: 10px;
+  height: 10px;
+  background: transparent;
+  border: 1.5px solid var(--text);
+}
+
+.swatchCi {
+  width: 10px;
+  height: 10px;
+  background: transparent;
+  border: 2px solid var(--text);
+  border-radius: 50%;
+}

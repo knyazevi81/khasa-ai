@@ -1,17 +1,22 @@
 @import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap");
 
 :root {
-  --bg: #0E0D0B;
-  --surf: #16140F;
-  --raised: #1D1A14;
-  --text: #EAE3D2;
-  --muted: #8A8170;
-  --dim: #5A5346;
-  --rule: #2A2620;
+  --bg: #14120F;
+  --surf: #1B1814;
+  --raised: #25211A;
+  --text: #EFE9D8;
+  --muted: #9E957F;
+  --dim: #6D6555;
+  --rule: #3A332A;
 
   --red: #C8202B;
   --yellow: #E8B71A;
   --green: #1E7A3C;
+
+  /* Чуть смягчили углы во всём UI */
+  --r-sm: 3px;
+  --r-md: 4px;
+  --r-lg: 6px;
 
   --mono: "Space Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --sans: "Inter", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;

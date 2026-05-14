@@ -4,8 +4,10 @@ from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.application.use_cases.auth import AuthService
+from app.application.use_cases.artifacts import ArtifactService
 from app.application.use_cases.chat import ChatService
 from app.application.use_cases.llm_credentials import LLMCredentialService
+from app.application.use_cases.system_prompts import SystemPromptService
 from app.application.use_cases.users import UserService
 from app.domain.exceptions.base import NotAuthenticatedError
 from app.domain.interface.email import AbstractEmailService
@@ -86,13 +88,41 @@ def get_chat_service(
     cred_service: Annotated[LLMCredentialService, Depends(get_llm_credential_service)],
     router: Annotated[AbstractLLMRouter, Depends(get_llm_router)],
 ) -> ChatService:
-    return ChatService(uow, cred_service, router)
+    artifact_service = ArtifactService(uow)
+    return ChatService(uow, cred_service, router, artifacts=artifact_service)
+
+
+def get_artifact_service(
+    uow: Annotated[UnitOfWork, Depends(get_uow)],
+) -> ArtifactService:
+    return ArtifactService(uow)
+
+
+def get_system_prompt_service(
+    uow: Annotated[UnitOfWork, Depends(get_uow)],
+) -> SystemPromptService:
+    return SystemPromptService(uow)
 
 
 async def get_current_user(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
     auth_service: Annotated[AuthService, Depends(get_auth_service)],
+    access_token: str | None = None,
 ) -> User:
-    if credentials is None:
+    """
+    Аутентификация юзера.
+
+    Обычно — через `Authorization: Bearer ...` (для AJAX и API).
+    Дополнительно поддерживаем `?access_token=...` в query — это нужно
+    для прямых GET-запросов (например, скачивание экспорта чата), где
+    нельзя установить кастомный header.
+    """
+    token: str | None = None
+    if credentials is not None:
+        token = credentials.credentials
+    elif access_token:
+        token = access_token
+
+    if not token:
         raise NotAuthenticatedError()
-    return await auth_service.get_current_user(credentials.credentials)
+    return await auth_service.get_current_user(token)

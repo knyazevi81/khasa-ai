@@ -106,3 +106,20 @@ class OllamaAdapter(AbstractLLMService):
                 return resp.status_code == 200
         except httpx.HTTPError:
             return False
+
+    async def list_models(self, credential: LLMCredential) -> list[str]:
+        """
+        Ollama: GET /api/tags возвращает список локально установленных
+        моделей. Это «честный» список — то, что реально доступно.
+        """
+        base = credential.base_url or self.DEFAULT_BASE
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(f"{base.rstrip('/')}/api/tags")
+                if resp.status_code != 200:
+                    return []
+                data = resp.json()
+                models = data.get("models") or []
+                return [m.get("name") for m in models if m.get("name")]
+        except httpx.HTTPError:
+            return []

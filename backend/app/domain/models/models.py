@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 
 
 # ── Auth tokens ───────────────────────────────────────────────────────────────
@@ -29,8 +29,17 @@ class TokenPayload(BaseModel):
 # ── User ──────────────────────────────────────────────────────────────────────
 
 class User(BaseModel):
+    """
+    Доменная модель юзера.
+
+    `email` — обычная строка, а не `EmailStr`: формат уже провалидирован
+    при регистрации (см. `RegisterRequest` в presentation-схемах). Здесь
+    мы загружаем уже сохранённую запись из БД и не должны падать на
+    специально-зарезервированных TLD типа `.local`, которые приходят, например,
+    от первого суперюзера, созданного через `make superuser`.
+    """
     id: uuid.UUID
-    email: EmailStr
+    email: str
     is_active: bool                  # одобрен админом — может логиниться
     is_email_verified: bool          # подтвердил email кодом
     is_superuser: bool

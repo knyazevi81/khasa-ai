@@ -4,6 +4,7 @@ import { create } from "zustand";
 import { api } from "./api";
 import { tokenStorage } from "./token-storage";
 import type {
+  ArtifactPushDTO,
   ChatDTO,
   MessageDTO,
   WSIncoming,
@@ -18,6 +19,10 @@ interface ChatState {
   error: string | null;
 
   ws: WebSocket | null;
+
+  // Последний «push» обновления артефакта от сервера — фронт ArtifactPanel
+  // подписан на это поле и сам перечитывает деталь.
+  lastArtifactPush: ArtifactPushDTO | null;
 
   // actions
   loadChat: (id: string) => Promise<void>;
@@ -37,6 +42,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   streaming: false,
   error: null,
   ws: null,
+  lastArtifactPush: null,
 
   loadChat: async (id) => {
     const [chat, msgList] = await Promise.all([
@@ -166,11 +172,29 @@ function handleIncoming(
   get: () => ChatState,
 ): void {
   switch (payload.type) {
-    case "user_message_created":
+    case "user_message_created": {
+      const msg = payload.message;
+      set((s) => {
+        const existing = s.messages.find((m) => m.id === msg.id);
+        const messages = existing
+          ? s.messages.map((m) => (m.id === msg.id ? msg : m))
+          : [...s.messages, msg];
+        return {
+          messages,
+          currentMessageId: msg.id,
+        };
+      });
+      // Бэк мог переименовать чат (автотайтлинг) — подтянем заголовок
+      const chat = get().chat;
+      if (chat && (chat.title === "Новый чат" || chat.title === "")) {
+        api.chats.get(chat.id).then((c) => set({ chat: c })).catch(() => {});
+      }
+      break;
+    }
+
     case "assistant_message_created": {
       const msg = payload.message;
       set((s) => {
-        // Не дубль: вдруг уже есть
         const existing = s.messages.find((m) => m.id === msg.id);
         const messages = existing
           ? s.messages.map((m) => (m.id === msg.id ? msg : m))
@@ -223,6 +247,11 @@ function handleIncoming(
             )
           : s.messages,
       }));
+      break;
+    }
+
+    case "artifact": {
+      set({ lastArtifactPush: payload.artifact });
       break;
     }
   }

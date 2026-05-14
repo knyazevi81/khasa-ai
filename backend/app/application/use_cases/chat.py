@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
@@ -17,6 +18,8 @@ from app.domain.models.llm import (
 )
 from app.application.use_cases.llm_credentials import LLMCredentialService
 from app.infrastructure.database.uow import UnitOfWork
+
+logger_chat = logging.getLogger(__name__)
 
 
 class ChatNotFoundError(AppException):
@@ -50,10 +53,16 @@ class ChatService:
         uow: UnitOfWork,
         llm_credentials: LLMCredentialService,
         router: AbstractLLMRouter,
+        artifacts: "ArtifactService | None" = None,
     ) -> None:
         self.uow = uow
         self.llm_credentials = llm_credentials
         self.router = router
+        # Поздний импорт чтобы избежать циклической зависимости
+        if artifacts is None:
+            from app.application.use_cases.artifacts import ArtifactService
+            artifacts = ArtifactService(uow)
+        self.artifacts = artifacts
 
     # ── CRUD чатов ───────────────────────────────────────────────────────────
 
@@ -124,6 +133,10 @@ class ChatService:
         """
         Добавляет user-узел в граф. Родитель — либо явный (при форке/реплае),
         либо текущий лист чата.
+
+        Если у чата ещё стоит дефолтное название "Новый чат" — заодно
+        автоматически проставляем заголовок из первых ~50 символов сообщения.
+        Это убирает «новый чат» из истории и делает её читаемой.
         """
         chat = await self.get_chat(chat_id, user_id)
 
@@ -144,6 +157,12 @@ class ChatService:
             status=MessageStatus.READY.value,
         )
         await self.uow.chats.set_current_message(chat_id, msg_id)
+
+        # Автотайтлинг
+        if chat.title in ("Новый чат", "New chat", ""):
+            new_title = _make_title(content)
+            if new_title and new_title != chat.title:
+                await self.uow.chats.update_fields(chat_id, title=new_title)
 
         msg = await self.uow.messages.get_by_id(msg_id)
         assert msg is not None
@@ -224,6 +243,29 @@ class ChatService:
         # Базовый system_prompt
         base_system = chat.system_prompt
 
+        # ── Artifact directive ────────────────────────────────────────────────
+        # Учим модель использовать специальный fenced-блок для долгих
+        # документов/кода/схем. На фронте такие блоки рендерятся в боковой
+        # панели как «артефакты» с историей версий.
+        artifact_directive = (
+            "\n\nКогда отвечаешь длинным самостоятельным документом (код, статья, "
+            "конспект, диаграмма, JSON-схема), оформляй его как АРТЕФАКТ. "
+            "Артефакт = специальный fenced-блок:\n\n"
+            "```khasa-artifact:KIND:SLUG:TITLE[:LANG]\n"
+            "содержимое\n"
+            "```\n\n"
+            "KIND — один из: markdown, code, html, svg, mermaid, json.\n"
+            "SLUG — короткий стабильный идентификатор (a-z, 0-9, дефис), "
+            "вроде project-plan. ВАЖНО: если в этом диалоге ты уже создавал "
+            "артефакт с таким slug — переиспользуй его, тогда получится новая "
+            "версия того же документа, а не отдельный.\n"
+            "TITLE — человекочитаемое название.\n"
+            "LANG — для KIND=code: python, typescript, rust, ...\n\n"
+            "Внутри артефакта НЕ используй другие ```khasa-artifact:``` блоки. "
+            "Краткие пояснения пиши обычным текстом ВНЕ блока."
+        )
+        base_system = (base_system or "") + artifact_directive
+
         # ── Agent mode: planner step ─────────────────────────────────────────
         # Дешёвый трюк: добавляем в system инструкцию выдать сначала JSON-план,
         # потом продолжать обычным ответом. Парсим план из начала первого
@@ -273,10 +315,18 @@ class ChatService:
         accumulated_for_plan: list[str] = []
         plan_parsed = not chat.agent_mode  # если не агент — сразу True
 
+        # Для парсинга артефактов — храним весь накопленный текст и список
+        # уже эмитнутых (artifact_id, version_id) пар, чтобы не слать дубль.
+        full_text_parts: list[str] = []
+        emitted_versions: set[uuid.UUID] = set()
+        last_artifact_scan_len = 0
+        ARTIFACT_SCAN_EVERY = 200  # символов
+
         try:
             async for event in adapter.stream(credential, request):
                 if event.type == StreamEventType.DELTA and event.text:
                     buffer.append(event.text)
+                    full_text_parts.append(event.text)
                     if not plan_parsed:
                         accumulated_for_plan.append(event.text)
                         plan_parsed = await self._try_parse_plan(
@@ -292,6 +342,19 @@ class ChatService:
                         last_flush = 0
                     else:
                         last_flush = total_len
+
+                    # Раз в ARTIFACT_SCAN_EVERY символов парсим артефакты
+                    full_len = sum(len(p) for p in full_text_parts)
+                    if full_len - last_artifact_scan_len >= ARTIFACT_SCAN_EVERY:
+                        last_artifact_scan_len = full_len
+                        async for ev in self._scan_artifacts(
+                            chat_id=chat.id,
+                            message_id=assistant_msg_id,
+                            accumulated="".join(full_text_parts),
+                            emitted=emitted_versions,
+                        ):
+                            yield ev
+
                     yield event
 
                 elif event.type == StreamEventType.ERROR:
@@ -330,6 +393,55 @@ class ChatService:
             error=error,
         )
         await self.uow.session.commit()
+
+        # Финальный артефакт-скан: вдруг последний блок закрылся прямо перед DONE
+        if not error and full_text_parts:
+            async for ev in self._scan_artifacts(
+                chat_id=chat.id,
+                message_id=assistant_msg_id,
+                accumulated="".join(full_text_parts),
+                emitted=emitted_versions,
+            ):
+                yield ev
+
+    async def _scan_artifacts(
+        self,
+        *,
+        chat_id: uuid.UUID,
+        message_id: uuid.UUID,
+        accumulated: str,
+        emitted: set[uuid.UUID],
+    ) -> AsyncIterator[StreamEvent]:
+        """
+        Парсит закрытые артефакт-блоки и эмитит StreamEvent.ARTIFACT для каждой
+        НОВОЙ версии (которую мы ещё не эмитили в этом стриме).
+        """
+        try:
+            changed = await self.artifacts.upsert_from_stream(
+                chat_id=chat_id,
+                message_id=message_id,
+                accumulated_text=accumulated,
+            )
+        except Exception as exc:
+            # Парсинг артефакта не должен ронять весь стрим
+            logger_chat.warning("artifact upsert failed: %s", exc)
+            return
+
+        for art in changed:
+            if art.current_version_id and art.current_version_id not in emitted:
+                emitted.add(art.current_version_id)
+                await self.uow.session.commit()
+                yield StreamEvent(
+                    type=StreamEventType.ARTIFACT,
+                    raw={
+                        "artifact_id": str(art.id),
+                        "version_id": str(art.current_version_id),
+                        "slug": art.slug,
+                        "kind": art.kind,
+                        "title": art.title,
+                        "language": art.language,
+                    },
+                )
 
     async def regenerate(
         self,
@@ -450,6 +562,28 @@ class ChatService:
         )
         await self.uow.chats.set_current_message(chat_id, new_id)
 
+        # Автотайтлинг (если чат всё ещё «Новый чат»)
+        if chat.title in ("Новый чат", "New chat", ""):
+            new_title = _make_title(new_content)
+            if new_title and new_title != chat.title:
+                await self.uow.chats.update_fields(chat_id, title=new_title)
+
         msg = await self.uow.messages.get_by_id(new_id)
         assert msg is not None
         return msg
+
+
+def _make_title(content: str) -> str:
+    """
+    Подрезает первое сообщение юзера до короткого заголовка для истории чатов.
+    Убирает блоки кода и аттачменты, чтобы они не лезли в название.
+    """
+    import re
+    cleaned = re.sub(r"```[\s\S]*?```", " ", content)
+    cleaned = re.sub(r"^📎.*$", "", cleaned, flags=re.MULTILINE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if not cleaned:
+        return ""
+    if len(cleaned) > 50:
+        return cleaned[:48].rstrip() + "…"
+    return cleaned

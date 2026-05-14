@@ -127,3 +127,40 @@ class OpenAIAdapter(AbstractLLMService):
                 return resp.status_code != 401
         except httpx.HTTPError:
             return False
+
+    async def list_models(self, credential: LLMCredential) -> list[str]:
+        """
+        Стандартный OpenAI-совместимый /v1/models. Фильтруем под чат-модели —
+        выкидываем embeddings/audio/whisper/image.
+        """
+        base = credential.base_url or self.DEFAULT_BASE
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    f"{base.rstrip('/')}/v1/models",
+                    headers={"Authorization": f"Bearer {credential.secret}"},
+                )
+                if resp.status_code != 200:
+                    return _FALLBACK_OPENAI
+                data = resp.json()
+                items = data.get("data") or []
+                ids = [m.get("id") for m in items if m.get("id")]
+                chat_like = [
+                    m for m in ids
+                    if any(p in m for p in ("gpt-", "o1", "o3", "o4", "chatgpt"))
+                    and not any(p in m for p in (
+                        "embed", "whisper", "audio", "image", "tts", "dall-e", "moderation",
+                    ))
+                ]
+                chat_like.sort()
+                return chat_like or _FALLBACK_OPENAI
+        except httpx.HTTPError:
+            return _FALLBACK_OPENAI
+
+
+_FALLBACK_OPENAI = [
+    "gpt-4o",
+    "gpt-4o-mini",
+    "gpt-4-turbo",
+    "gpt-3.5-turbo",
+]

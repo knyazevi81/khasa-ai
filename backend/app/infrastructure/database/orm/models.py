@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -208,3 +208,88 @@ class AgentSubtasks(Base):
     result: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+# ── Artifacts (отдельные документы рядом с чатом) ────────────────────────────
+
+
+class Artifacts(Base):
+    """
+    Артефакт — самостоятельный документ, который ассистент создаёт и
+    обновляет в ходе диалога. У одного артефакта может быть много версий —
+    активная задаётся `current_version_id`.
+
+    Уникальность `(chat_id, slug)` позволяет LLM ссылаться на «этот же»
+    артефакт между сообщениями и инкрементировать версии.
+    """
+    __tablename__ = "artifacts"
+    __table_args__ = (
+        UniqueConstraint("chat_id", "slug", name="uq_artifacts_chat_slug"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    chat_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("chats.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    slug: Mapped[str] = mapped_column(String(120), nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    language: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    current_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
+
+
+class ArtifactVersions(Base):
+    __tablename__ = "artifact_versions"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    artifact_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("artifacts.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    version_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    message_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("messages.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+
+# ── System prompts (library) ─────────────────────────────────────────────────
+
+
+class SystemPrompts(Base):
+    """
+    Библиотека пользовательских system-промптов. Юзер может создать «роль»
+    («помощник по python», «редактор», «переводчик с английского»), назвать
+    её и потом выбирать при создании чата.
+    """
+    __tablename__ = "system_prompts"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    title: Mapped[str] = mapped_column(String(120), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    description: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    # Эмодзи или короткий ярлык для UI («🐍», «✏️», «🌍»)
+    icon: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    is_pinned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

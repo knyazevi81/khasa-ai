@@ -17,13 +17,13 @@ BRAND = {
     "red":    "#C8202B",
     "yellow": "#E8B71A",
     "green":  "#1E7A3C",
-    "bg":     "#0E0D0B",
-    "surf":   "#16140F",
-    "raised": "#1D1A14",
-    "text":   "#EAE3D2",
-    "muted":  "#8A8170",
-    "dim":    "#5A5346",
-    "rule":   "#2A2620",
+    "bg":     "#14120F",
+    "surf":   "#1B1814",
+    "raised": "#25211A",
+    "text":   "#EFE9D8",
+    "muted":  "#9E957F",
+    "dim":    "#6D6555",
+    "rule":   "#3A332A",
 }
 
 

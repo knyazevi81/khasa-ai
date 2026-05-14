@@ -1,29 +1,33 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { Logomark } from "@/components/common/Logomark";
-import { Button } from "@/components/common/Button";
-import { GraphView } from "@/components/chat/GraphView";
+import { ChatSidebar } from "@/components/chat/ChatSidebar";
+import { ArtifactPanel } from "@/components/chat/ArtifactPanel";
+import { GraphOverlay } from "@/components/chat/GraphOverlay";
+import { Markdown } from "@/components/chat/Markdown";
+import { ModelSelect } from "@/components/chat/ModelSelect";
+import { PromptSelect } from "@/components/chat/PromptSelect";
 import { SubtasksList } from "@/components/chat/SubtasksList";
+import { BranchIcon } from "@/components/common/BranchIcon";
 import { useAuthStore } from "@/lib/auth-store";
 import { useChatStore } from "@/lib/chat-store";
 import { api } from "@/lib/api";
-import type { MessageDTO, ChatDTO } from "@/lib/chat-types";
+import type { MessageDTO } from "@/lib/chat-types";
 import styles from "./chat.module.css";
 
 export default function ChatDetail() {
   const router = useRouter();
   const params = useParams<{ id: string }>();
   const chatId = params.id;
-  const { user, initialized, bootstrap, logout } = useAuthStore();
+  const { user, initialized, bootstrap } = useAuthStore();
   const {
     chat,
     messages,
     currentMessageId,
     streaming,
     error,
+    lastArtifactPush,
     loadChat,
     connect,
     disconnect,
@@ -34,18 +38,24 @@ export default function ChatDetail() {
     reloadMessages,
   } = useChatStore();
 
-  const [allChats, setAllChats] = useState<ChatDTO[]>([]);
   const [composer, setComposer] = useState("");
-  const [attachment, setAttachment] = useState<{ filename: string; text: string } | null>(null);
+  const [attachment, setAttachment] = useState<{
+    filename: string;
+    text: string;
+  } | null>(null);
   const [uploadingFile, setUploadingFile] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
 
-  // Редактирование user-сообщения (edit-and-fork)
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingContent, setEditingContent] = useState("");
   const [agentMode, setAgentMode] = useState(false);
+  const [graphOpen, setGraphOpen] = useState(false);
+  const [artifactsOpen, setArtifactsOpen] = useState(false);
+  const [artifactsCount, setArtifactsCount] = useState(0);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
 
   // ── auth gate ────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -56,7 +66,7 @@ export default function ChatDetail() {
     if (initialized && !user) router.replace("/auth/login");
   }, [initialized, user, router]);
 
-  // ── load chat + connect ws ───────────────────────────────────────────────
+  // ── load + connect ───────────────────────────────────────────────────────
   useEffect(() => {
     if (!user || !chatId) return;
     (async () => {
@@ -73,34 +83,52 @@ export default function ChatDetail() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, chatId]);
 
-  // Подтянем agent_mode из чата
   useEffect(() => {
     if (chat) setAgentMode(chat.agent_mode);
   }, [chat?.id, chat?.agent_mode]);
 
-  async function toggleAgentMode() {
-    if (!chat) return;
-    const next = !agentMode;
-    setAgentMode(next);
-    try {
-      await api.chats.update(chat.id, { agent_mode: next });
-    } catch {
-      setAgentMode(!next); // откатим при ошибке
-    }
-  }
-
-  // ── load sidebar list ────────────────────────────────────────────────────
+  // Загрузка количества артефактов при открытии чата
   useEffect(() => {
-    if (!user) return;
-    api.chats.list().then((r) => setAllChats(r.chats));
-  }, [user, chat?.title]);
+    if (!chatId) return;
+    api.chats
+      .artifacts(chatId)
+      .then((r) => setArtifactsCount(r.total))
+      .catch(() => setArtifactsCount(0));
+  }, [chatId]);
 
-  // ── auto-scroll ──────────────────────────────────────────────────────────
+  // Реакция на push артефакта из стрима: счётчик + первый раз авто-открываем
+  useEffect(() => {
+    if (!lastArtifactPush) return;
+    api.chats
+      .artifacts(chatId)
+      .then((r) => {
+        setArtifactsCount(r.total);
+        if (!artifactsOpen && r.total === 1) {
+          // первый артефакт в чате — раскроем сразу
+          setArtifactsOpen(true);
+        }
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastArtifactPush?.version_id]);
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages, currentMessageId]);
 
-  // ── активная ветка: путь от корня к currentMessageId ─────────────────────
+  // Закрытие меню экспорта по клику вне его
+  useEffect(() => {
+    function onDoc(e: MouseEvent) {
+      if (!exportMenuRef.current) return;
+      if (!exportMenuRef.current.contains(e.target as Node)) {
+        setExportMenuOpen(false);
+      }
+    }
+    document.addEventListener("click", onDoc);
+    return () => document.removeEventListener("click", onDoc);
+  }, []);
+
+  // ── derived: активная ветка (путь от корня к current) ─────────────────────
   const activeBranch = useMemo<MessageDTO[]>(() => {
     if (!currentMessageId || messages.length === 0) return [];
     const byId = new Map(messages.map((m) => [m.id, m]));
@@ -115,25 +143,36 @@ export default function ChatDetail() {
     return path;
   }, [messages, currentMessageId]);
 
-  // Альтернативные ветки: для каждого assistant-сообщения в активной ветке
-  // ищем «братьев» по тому же parent_id
   function getSiblings(msg: MessageDTO): MessageDTO[] {
-    if (msg.role !== "assistant" || !msg.parent_id) return [];
+    if (!msg.parent_id) {
+      return messages.filter((m) => m.parent_id === null && m.role === msg.role);
+    }
     return messages.filter(
-      (m) => m.parent_id === msg.parent_id && m.role === "assistant",
+      (m) => m.parent_id === msg.parent_id && m.role === msg.role,
     );
   }
 
-  // То же для user-сообщений (edit-and-fork создаёт user-братьев)
-  function getUserSiblings(msg: MessageDTO, all: MessageDTO[]): MessageDTO[] {
-    if (msg.role !== "user") return [];
-    return all.filter(
-      (m) => m.parent_id === msg.parent_id && m.role === "user",
-    );
-  }
+  // Считаем количество веток в чате (узлов с N>1 «братьями»)
+  const branchCount = useMemo(() => {
+    const parentCounts = new Map<string | null, number>();
+    for (const m of messages) {
+      parentCounts.set(m.parent_id, (parentCounts.get(m.parent_id) ?? 0) + 1);
+    }
+    let branches = 0;
+    for (const c of parentCounts.values()) if (c > 1) branches += c - 1;
+    return branches;
+  }, [messages]);
 
-  function hasUserSiblings(msg: MessageDTO, all: MessageDTO[]): boolean {
-    return getUserSiblings(msg, all).length > 1;
+  // ── actions ──────────────────────────────────────────────────────────────
+  async function toggleAgentMode() {
+    if (!chat) return;
+    const next = !agentMode;
+    setAgentMode(next);
+    try {
+      await api.chats.update(chat.id, { agent_mode: next });
+    } catch {
+      setAgentMode(!next);
+    }
   }
 
   async function handleFileUpload(file: File) {
@@ -155,7 +194,8 @@ export default function ChatDetail() {
     if (!trimmed && !attachment) return;
     let content = trimmed;
     if (attachment) {
-      content = `📎 ${attachment.filename}\n\n\`\`\`\n${attachment.text}\n\`\`\`\n\n${trimmed}`.trim();
+      content =
+        `📎 ${attachment.filename}\n\n\`\`\`\n${attachment.text}\n\`\`\`\n\n${trimmed}`.trim();
     }
     sendMessage(content);
     setComposer("");
@@ -172,6 +212,15 @@ export default function ChatDetail() {
   async function handleNodeClick(messageId: string) {
     await switchToBranch(messageId);
     await reloadMessages();
+  }
+
+  async function handleNodeContextMenu(e: React.MouseEvent, messageId: string) {
+    e.preventDefault();
+    const text = prompt("Форк от этого узла. Введите новое сообщение:");
+    if (text && text.trim()) {
+      forkMessage(messageId, text.trim());
+      setGraphOpen(false);
+    }
   }
 
   function startEdit(msg: MessageDTO) {
@@ -191,319 +240,480 @@ export default function ChatDetail() {
     setEditingContent("");
   }
 
-  async function handleNodeContextMenu(e: React.MouseEvent, messageId: string) {
-    // Произвольный форк от любого узла графа (правый клик).
-    // Открываем prompt — это минималистичный UX для MVP.
-    e.preventDefault();
-    const text = prompt("Форк от этого узла. Введите новое сообщение:");
-    if (text && text.trim()) {
-      forkMessage(messageId, text.trim());
-    }
-  }
-
   if (!initialized || !user || !chat) {
-    return <div className={styles.loading}>[runtime] загрузка...</div>;
+    return (
+      <div className={styles.loading}>
+        <span>[runtime] загрузка...</span>
+      </div>
+    );
   }
 
   return (
-    <div className={styles.page}>
-      <header className={styles.header}>
-        <Link href="/chat" className={styles.logoLink}>
-          <Logomark size={24} caption={false} />
-        </Link>
-        <span className={styles.chatTitle}>{chat.title}</span>
-        <span className={styles.metaSep}>·</span>
-        <span className={styles.chatMeta}>
-          {chat.model || "—"} · {messages.length} узлов
-        </span>
-        <span style={{ flex: 1 }} />
-
-        <button
-          className={`${styles.agentToggle} ${agentMode ? styles.agentToggleOn : ""}`}
-          onClick={toggleAgentMode}
-          title="Агентный режим: ассистент сначала декомпозирует задачу"
-        >
-          {agentMode ? "◉ агент" : "○ агент"}
-        </button>
-
-        <span className={styles.userEmail}>{user.email}</span>
-        <Link href="/settings">
-          <Button variant="ghost">настройки</Button>
-        </Link>
-        <Button
-          variant="ghost"
-          onClick={async () => {
-            await logout();
-            router.replace("/auth/login");
-          }}
-        >
-          выйти
-        </Button>
-      </header>
+    <div className={styles.layout}>
+      <ChatSidebar activeChatId={chatId} />
 
       <main className={styles.main}>
-        {/* ── sidebar: список чатов ────────────────────────────── */}
-        <aside className={styles.sidebar}>
-          <div className={styles.sidebarHeader}>
-            <span className={styles.sidebarTitle}>// чаты</span>
-            <Link href="/chat" className={styles.newLink}>+ новый</Link>
+        {/* Topbar */}
+        <header className={styles.topbar}>
+          <div className={styles.topbarLeft}>
+            <span className={styles.title}>{chat.title}</span>
+            <span className={styles.crumb}>·</span>
+            <span className={styles.meta}>
+              {messages.length} {wordNodes(messages.length)}
+            </span>
+            {streaming && (
+              <>
+                <span className={styles.crumb}>·</span>
+                <span className={styles.metaLive}>
+                  <span className={styles.liveDot} /> стрим
+                </span>
+              </>
+            )}
           </div>
-          <ul className={styles.chatList}>
-            {allChats.map((c) => (
-              <li key={c.id}>
-                <Link
-                  href={`/chat/${c.id}`}
-                  className={`${styles.chatItem} ${c.id === chatId ? styles.chatItemActive : ""}`}
-                >
-                  {c.title}
-                </Link>
-              </li>
-            ))}
-          </ul>
-        </aside>
 
-        {/* ── центральная колонка: сообщения активной ветки ───── */}
-        <section className={styles.conversation}>
+          <div className={styles.topbarRight}>
+            <PromptSelect
+              chatId={chat.id}
+              currentSystemPrompt={chat.system_prompt}
+              onChanged={() => loadChat(chatId)}
+            />
+
+            <ModelSelect
+              chatId={chat.id}
+              credentialId={chat.credential_id}
+              currentModel={chat.model}
+              onModelChange={async () => {
+                await loadChat(chatId);
+              }}
+            />
+
+            <button
+              className={`${styles.iconBtn} ${agentMode ? styles.iconBtnOn : ""}`}
+              onClick={toggleAgentMode}
+              title="Агентный режим: ассистент сначала декомпозирует задачу"
+            >
+              {agentMode ? "◉" : "○"}
+              <span className={styles.iconBtnLabel}>агент</span>
+            </button>
+
+            <button
+              className={`${styles.iconBtn} ${artifactsOpen ? styles.iconBtnOn : ""}`}
+              onClick={() => setArtifactsOpen((v) => !v)}
+              title="Артефакты"
+            >
+              ◫
+              <span className={styles.iconBtnLabel}>арт</span>
+              {artifactsCount > 0 && !artifactsOpen && (
+                <span className={styles.branchBadge}>{artifactsCount}</span>
+              )}
+            </button>
+
+            <button
+              className={`${styles.iconBtn} ${graphOpen ? styles.iconBtnOn : ""}`}
+              onClick={() => setGraphOpen((v) => !v)}
+              title="Граф диалога"
+            >
+              <BranchIcon size={13} />
+              {branchCount > 0 && !graphOpen && (
+                <span className={styles.branchBadge}>{branchCount}</span>
+              )}
+            </button>
+
+            <div ref={exportMenuRef} className={styles.exportWrap}>
+              <button
+                className={styles.iconBtn}
+                onClick={() => setExportMenuOpen((v) => !v)}
+                title="Экспорт чата"
+              >
+                ⋯
+              </button>
+              {exportMenuOpen && (
+                <div className={styles.exportMenu}>
+                  <a
+                    className={styles.exportItem}
+                    href={api.chats.exportUrl(chat.id, "md")}
+                    download
+                    onClick={() => setExportMenuOpen(false)}
+                  >
+                    <span className={styles.exportTag}>MD</span>
+                    <span>скачать как markdown</span>
+                  </a>
+                  <a
+                    className={styles.exportItem}
+                    href={api.chats.exportUrl(chat.id, "json")}
+                    download
+                    onClick={() => setExportMenuOpen(false)}
+                  >
+                    <span className={styles.exportTag}>JSON</span>
+                    <span>скачать как json</span>
+                  </a>
+                </div>
+              )}
+            </div>
+          </div>
+        </header>
+
+        {/* Messages */}
+        <div className={styles.scroll}>
           <div className={styles.messages}>
             {activeBranch.length === 0 ? (
               <div className={styles.emptyConvo}>
-                <p className={styles.emptyHint}>
-                  // пустой чат · начните диалог снизу
-                </p>
+                <div className={styles.emptyTitle}>
+                  С чего <span className={styles.emptyAccent}>начнём</span>?
+                </div>
+                <div className={styles.emptyHint}>
+                  // новый чат · напишите запрос внизу
+                </div>
                 {!chat.credential_id && (
-                  <p className={styles.emptyHint}>
+                  <div className={styles.emptyWarn}>
                     ⚠ ключ LLM не выбран — добавьте в{" "}
-                    <Link href="/settings" className={styles.inlineLink}>
+                    <button
+                      className={styles.linkLike}
+                      onClick={() => router.push("/settings")}
+                    >
                       настройках
-                    </Link>
-                  </p>
+                    </button>
+                  </div>
                 )}
               </div>
             ) : (
               activeBranch.map((m) => {
                 const siblings = getSiblings(m);
-                const hasAlternatives = siblings.length > 1;
                 const isEditing = editingId === m.id;
                 return (
-                  <article
+                  <MessageBlock
                     key={m.id}
-                    className={`${styles.message} ${styles[`role_${m.role}`]}`}
-                    data-status={m.status}
-                  >
-                    <div className={styles.messageHead}>
-                      <span className={styles.messageRole}>
-                        {m.role === "user"
-                          ? "you"
-                          : m.role === "assistant"
-                            ? "khasa"
-                            : "system"}
-                      </span>
-                      {m.model && (
-                        <span className={styles.messageModel}>{m.model}</span>
-                      )}
-                      {m.status === "streaming" && (
-                        <span className={styles.streamDot}>● стрим</span>
-                      )}
-                      {m.status === "failed" && (
-                        <span className={styles.failedTag}>✕ ошибка</span>
-                      )}
-                    </div>
-
-                    {isEditing ? (
-                      <div className={styles.editBox}>
-                        <textarea
-                          className={styles.editTextarea}
-                          value={editingContent}
-                          onChange={(e) => setEditingContent(e.target.value)}
-                          rows={Math.min(12, editingContent.split("\n").length + 1)}
-                          autoFocus
-                        />
-                        <div className={styles.editActions}>
-                          <button
-                            className={styles.actionButton}
-                            onClick={cancelEdit}
-                          >
-                            отмена
-                          </button>
-                          <button
-                            className={`${styles.actionButton} ${styles.primaryButton}`}
-                            onClick={confirmEdit}
-                            disabled={!editingContent.trim() || streaming}
-                          >
-                            ↳ форк
-                          </button>
-                        </div>
-                        <p className={styles.editHint}>
-                          // создастся новая ветка с этим текстом, прежнее сообщение сохранится
-                        </p>
-                      </div>
-                    ) : (
-                      <div className={styles.messageContent}>
-                        {m.content || (m.status === "streaming" ? "..." : "")}
-                        {m.status === "streaming" && (
-                          <span className={styles.caret} />
-                        )}
-                      </div>
-                    )}
-
-                    {m.error && (
-                      <div className={styles.errorBox}>// {m.error}</div>
-                    )}
-
-                    {m.role === "assistant" && chat.agent_mode && (
-                      <SubtasksList
-                        chatId={chat.id}
-                        messageId={m.id}
-                        reloadKey={`${m.status}:${m.content.length}`}
-                      />
-                    )}
-
-                    {!isEditing && (m.role === "assistant" && m.status === "ready") && (
-                      <div className={styles.messageActions}>
-                        <button
-                          className={styles.actionButton}
-                          onClick={() => regenerate(m.id)}
-                          disabled={streaming}
-                        >
-                          ↻ регенерировать
-                        </button>
-
-                        {hasAlternatives && (
-                          <div className={styles.branchSwitcher}>
-                            <span className={styles.branchLabel}>
-                              ветки ({siblings.length}):
-                            </span>
-                            {siblings.map((s, i) => (
-                              <button
-                                key={s.id}
-                                className={`${styles.branchPill} ${s.id === m.id ? styles.branchPillActive : ""}`}
-                                onClick={() => handleNodeClick(s.id)}
-                              >
-                                {String.fromCharCode(97 + i)}
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {!isEditing && m.role === "user" && (
-                      <div className={styles.messageActions}>
-                        <button
-                          className={styles.actionButton}
-                          onClick={() => startEdit(m)}
-                          disabled={streaming}
-                        >
-                          ✎ редактировать
-                        </button>
-
-                        {hasUserSiblings(m, messages) && (
-                          <div className={styles.branchSwitcher}>
-                            <span className={styles.branchLabel}>
-                              версии:
-                            </span>
-                            {getUserSiblings(m, messages).map((s, i) => (
-                              <button
-                                key={s.id}
-                                className={`${styles.branchPill} ${s.id === m.id ? styles.branchPillActive : ""}`}
-                                onClick={() => handleNodeClick(s.id)}
-                              >
-                                {String.fromCharCode(97 + i)}
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </article>
+                    msg={m}
+                    siblings={siblings}
+                    chatId={chat.id}
+                    chatAgentMode={chat.agent_mode}
+                    isEditing={isEditing}
+                    editingContent={editingContent}
+                    setEditingContent={setEditingContent}
+                    streaming={streaming}
+                    onStartEdit={() => startEdit(m)}
+                    onCancelEdit={cancelEdit}
+                    onConfirmEdit={confirmEdit}
+                    onRegenerate={() => regenerate(m.id)}
+                    onSwitchTo={(id) => handleNodeClick(id)}
+                  />
                 );
               })
             )}
             <div ref={messagesEndRef} />
           </div>
 
-          {/* composer */}
-          <div className={styles.composer}>
-            {attachment && (
-              <div className={styles.attachmentChip}>
-                <span>📎 {attachment.filename}</span>
-                <span className={styles.attachmentSize}>
-                  · {attachment.text.length.toLocaleString("ru-RU")} симв.
-                </span>
+          {/* Composer */}
+          <div className={styles.composerWrap}>
+            <div className={styles.composer}>
+              {attachment && (
+                <div className={styles.attachmentChip}>
+                  <span>📎 {attachment.filename}</span>
+                  <span className={styles.chipSize}>
+                    · {attachment.text.length.toLocaleString("ru-RU")} симв.
+                  </span>
+                  <button
+                    className={styles.chipRemove}
+                    onClick={() => setAttachment(null)}
+                  >
+                    ×
+                  </button>
+                </div>
+              )}
+
+              {uploadError && (
+                <div className={styles.errBanner}>// {uploadError}</div>
+              )}
+              {error && <div className={styles.errBanner}>// {error}</div>}
+
+              <div className={styles.composerRow}>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".txt,.pdf,text/plain,application/pdf"
+                  style={{ display: "none" }}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) handleFileUpload(f);
+                  }}
+                />
                 <button
-                  className={styles.attachmentRemove}
-                  onClick={() => setAttachment(null)}
+                  className={styles.fileBtn}
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploadingFile}
+                  title=".txt или .pdf (текстовый)"
                 >
-                  ✕
+                  {uploadingFile ? "…" : "+"}
+                </button>
+
+                <textarea
+                  className={styles.textarea}
+                  value={composer}
+                  onChange={(e) => setComposer(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder={
+                    chat.credential_id
+                      ? "напишите khasa…  ⏎ — отправить, ⇧⏎ — перенос"
+                      : "сначала добавьте ключ LLM в настройках"
+                  }
+                  disabled={!chat.credential_id || streaming}
+                  rows={1}
+                />
+
+                <button
+                  className={styles.sendBtn}
+                  onClick={handleSend}
+                  disabled={
+                    !chat.credential_id ||
+                    streaming ||
+                    (!composer.trim() && !attachment)
+                  }
+                  title="отправить (Enter)"
+                >
+                  {streaming ? "…" : "→"}
                 </button>
               </div>
-            )}
-            {uploadError && (
-              <div className={styles.uploadError}>// {uploadError}</div>
-            )}
-            {error && (
-              <div className={styles.uploadError}>// {error}</div>
-            )}
 
-            <div className={styles.composerRow}>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".txt,.pdf,text/plain,application/pdf"
-                style={{ display: "none" }}
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) handleFileUpload(f);
-                }}
-              />
-              <button
-                className={styles.fileButton}
-                onClick={() => fileInputRef.current?.click()}
-                disabled={uploadingFile}
-                title=".txt или .pdf (текстовый)"
-              >
-                {uploadingFile ? "..." : "📎"}
-              </button>
-
-              <textarea
-                className={styles.textarea}
-                value={composer}
-                onChange={(e) => setComposer(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder={
-                  chat.credential_id
-                    ? "напишите сообщение... (Enter — отправить, Shift+Enter — перенос)"
-                    : "сначала добавьте ключ LLM в настройках"
-                }
-                disabled={!chat.credential_id || streaming}
-                rows={3}
-              />
-
-              <button
-                className={styles.sendButton}
-                onClick={handleSend}
-                disabled={
-                  !chat.credential_id ||
-                  streaming ||
-                  (!composer.trim() && !attachment)
-                }
-              >
-                {streaming ? "..." : "→"}
-              </button>
+              <div className={styles.composerHint}>
+                <span>txt · pdf до 10 MB</span>
+                <span style={{ flex: 1 }} />
+                <span>{composer.length} симв.</span>
+              </div>
             </div>
           </div>
-        </section>
-
-        {/* ── граф диалога справа ───────────────────────────────── */}
-        <aside className={styles.graphPanel}>
-          <GraphView
-            messages={messages}
-            currentMessageId={currentMessageId}
-            onNodeClick={handleNodeClick}
-            onNodeContextMenu={handleNodeContextMenu}
-          />
-        </aside>
+        </div>
       </main>
+
+      <GraphOverlay
+        open={graphOpen}
+        onClose={() => setGraphOpen(false)}
+        messages={messages}
+        currentMessageId={currentMessageId}
+        onNodeClick={(id) => {
+          handleNodeClick(id);
+        }}
+        onNodeContextMenu={handleNodeContextMenu}
+        branchCount={branchCount}
+      />
+
+      <ArtifactPanel
+        open={artifactsOpen}
+        onClose={() => setArtifactsOpen(false)}
+        chatId={chat.id}
+        pushedArtifact={lastArtifactPush}
+      />
     </div>
   );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Один блок сообщения. Стиль — минималистичный (как в khasa-dark.jsx):
+// meta-строка моноширинным шрифтом + вертикальная цветная полоса слева +
+// текст в Inter. Никаких рамок-карточек.
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface MessageBlockProps {
+  msg: MessageDTO;
+  siblings: MessageDTO[];
+  chatId: string;
+  chatAgentMode: boolean;
+  isEditing: boolean;
+  editingContent: string;
+  setEditingContent: (s: string) => void;
+  streaming: boolean;
+  onStartEdit: () => void;
+  onCancelEdit: () => void;
+  onConfirmEdit: () => void;
+  onRegenerate: () => void;
+  onSwitchTo: (id: string) => void;
+}
+
+function MessageBlock({
+  msg,
+  siblings,
+  chatId,
+  chatAgentMode,
+  isEditing,
+  editingContent,
+  setEditingContent,
+  streaming,
+  onStartEdit,
+  onCancelEdit,
+  onConfirmEdit,
+  onRegenerate,
+  onSwitchTo,
+}: MessageBlockProps) {
+  const isUser = msg.role === "user";
+  const isSystem = msg.role === "system";
+
+  const roleColor = isUser ? "var(--red)" : isSystem ? "var(--muted)" : "var(--green)";
+  const roleLabel = isUser ? "you" : isSystem ? "system" : "khasa";
+
+  const hasAlternatives = siblings.length > 1;
+
+  return (
+    <article className={styles.msg}>
+      {/* meta */}
+      <div className={styles.msgMeta}>
+        <span
+          className={styles.msgDot}
+          style={{ background: roleColor }}
+        />
+        <span
+          className={styles.msgRole}
+          style={{ color: roleColor, fontWeight: 700 }}
+        >
+          {roleLabel}
+        </span>
+        {msg.model && (
+          <>
+            <span className={styles.msgSep}>·</span>
+            <span className={styles.msgModel}>{msg.model}</span>
+          </>
+        )}
+        {msg.status === "streaming" && (
+          <>
+            <span className={styles.msgSep}>·</span>
+            <span className={styles.msgStream}>стрим…</span>
+          </>
+        )}
+        {msg.status === "failed" && (
+          <>
+            <span className={styles.msgSep}>·</span>
+            <span className={styles.msgFailed}>✕ ошибка</span>
+          </>
+        )}
+      </div>
+
+      {/* body */}
+      {isEditing ? (
+        <div
+          className={styles.msgBody}
+          style={{ borderColor: "var(--yellow)" }}
+        >
+          <textarea
+            className={styles.editArea}
+            value={editingContent}
+            onChange={(e) => setEditingContent(e.target.value)}
+            rows={Math.min(14, editingContent.split("\n").length + 1)}
+            autoFocus
+          />
+          <div className={styles.editActions}>
+            <button className={styles.btnGhost} onClick={onCancelEdit}>
+              отмена
+            </button>
+            <button
+              className={styles.btnAccent}
+              onClick={onConfirmEdit}
+              disabled={!editingContent.trim() || streaming}
+            >
+              ↳ форк
+            </button>
+          </div>
+          <div className={styles.editHint}>
+            // создастся новая ветка с этим текстом · прежняя сохранится
+          </div>
+        </div>
+      ) : (
+        <div
+          className={styles.msgBody}
+          style={{ borderColor: roleColor }}
+        >
+          {msg.role === "assistant" && msg.content ? (
+            <div style={{ whiteSpace: "normal" }}>
+              <Markdown content={msg.content} />
+              {msg.status === "streaming" && <span className={styles.caret} />}
+            </div>
+          ) : (
+            <>
+              {msg.content || (msg.status === "streaming" ? "…" : "")}
+              {msg.status === "streaming" && <span className={styles.caret} />}
+            </>
+          )}
+        </div>
+      )}
+
+      {msg.error && <div className={styles.errInline}>// {msg.error}</div>}
+
+      {/* subtasks panel for assistant in agent mode */}
+      {!isEditing && msg.role === "assistant" && chatAgentMode && (
+        <SubtasksList
+          chatId={chatId}
+          messageId={msg.id}
+          reloadKey={`${msg.status}:${msg.content.length}`}
+        />
+      )}
+
+      {/* actions */}
+      {!isEditing && (
+        <div className={styles.msgActions}>
+          {msg.role === "assistant" && msg.status === "ready" && (
+            <button
+              className={styles.btnGhost}
+              onClick={onRegenerate}
+              disabled={streaming}
+            >
+              ↻ регенерировать
+            </button>
+          )}
+          {isUser && (
+            <button
+              className={styles.btnGhost}
+              onClick={onStartEdit}
+              disabled={streaming}
+            >
+              ✎ редактировать
+            </button>
+          )}
+
+          {hasAlternatives && (
+            <div className={styles.branches}>
+              <span className={styles.branchesLabel}>
+                <BranchIcon size={10} color="var(--yellow)" />
+                {siblings.length}{" "}
+                {isUser
+                  ? wordVersions(siblings.length)
+                  : wordBranches(siblings.length)}
+              </span>
+              <div className={styles.branchPills}>
+                {siblings.map((s, i) => (
+                  <button
+                    key={s.id}
+                    className={`${styles.branchPill} ${s.id === msg.id ? styles.branchPillOn : ""}`}
+                    onClick={() => onSwitchTo(s.id)}
+                  >
+                    {String.fromCharCode(97 + i)}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </article>
+  );
+}
+
+// ── small ────────────────────────────────────────────────────────────────────
+
+function wordNodes(n: number) {
+  const m10 = n % 10;
+  const m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return "узел";
+  if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return "узла";
+  return "узлов";
+}
+
+function wordBranches(n: number) {
+  const m10 = n % 10;
+  if (m10 === 1) return "ветка";
+  if (m10 >= 2 && m10 <= 4) return "ветки";
+  return "веток";
+}
+
+function wordVersions(n: number) {
+  const m10 = n % 10;
+  if (m10 === 1) return "версия";
+  if (m10 >= 2 && m10 <= 4) return "версии";
+  return "версий";
 }

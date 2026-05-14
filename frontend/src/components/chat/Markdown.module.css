@@ -1,0 +1,149 @@
+.md {
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 14.5px;
+  line-height: 1.65;
+  word-wrap: break-word;
+}
+
+.md > *:first-child {
+  margin-top: 0;
+}
+
+.md > *:last-child {
+  margin-bottom: 0;
+}
+
+/* ── headings ────────────────────────────────────────────────────────────── */
+
+.md :global(h1),
+.md :global(h2),
+.md :global(h3),
+.md :global(h4) {
+  font-family: var(--display);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 1.4em 0 0.6em;
+  color: var(--text);
+}
+
+.md :global(h1) { font-size: 22px; }
+.md :global(h2) { font-size: 19px; }
+.md :global(h3) { font-size: 16px; }
+.md :global(h4) { font-size: 14px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+
+/* ── paragraphs / lists ──────────────────────────────────────────────────── */
+
+.md :global(p) {
+  margin: 0.6em 0;
+}
+
+.md :global(ul),
+.md :global(ol) {
+  margin: 0.6em 0 0.6em 1.4em;
+  padding: 0;
+}
+
+.md :global(li) {
+  margin: 0.2em 0;
+}
+
+.md :global(strong) {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.md :global(em) {
+  color: var(--muted);
+}
+
+/* ── inline code ─────────────────────────────────────────────────────────── */
+
+.md :global(code:not(pre code)) {
+  font-family: var(--mono);
+  font-size: 0.88em;
+  padding: 1px 6px;
+  background: var(--raised);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-sm);
+  color: var(--yellow);
+}
+
+/* ── pre code blocks ─────────────────────────────────────────────────────── */
+
+.md :global(pre) {
+  margin: 0.8em 0;
+  padding: 12px 14px;
+  background: var(--raised);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-md);
+  overflow-x: auto;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.md :global(pre code) {
+  font-family: var(--mono);
+  color: var(--text);
+  background: transparent;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+}
+
+/* ── blockquotes ─────────────────────────────────────────────────────────── */
+
+.md :global(blockquote) {
+  margin: 0.8em 0;
+  padding: 6px 14px;
+  border-left: 2px solid var(--yellow);
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* ── links ───────────────────────────────────────────────────────────────── */
+
+.md :global(a) {
+  color: var(--yellow);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.md :global(a:hover) {
+  color: var(--text);
+}
+
+/* ── tables (gfm) ────────────────────────────────────────────────────────── */
+
+.md :global(table) {
+  margin: 0.8em 0;
+  border-collapse: collapse;
+  border: 1px solid var(--rule);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+  font-size: 13px;
+}
+
+.md :global(th),
+.md :global(td) {
+  padding: 6px 12px;
+  border: 1px solid var(--rule);
+}
+
+.md :global(th) {
+  background: var(--raised);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  text-align: left;
+}
+
+/* ── horizontal rule ─────────────────────────────────────────────────────── */
+
+.md :global(hr) {
+  border: 0;
+  border-top: 1px solid var(--rule);
+  margin: 1.4em 0;
+}

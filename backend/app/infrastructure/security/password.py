@@ -3,8 +3,11 @@ from pwdlib import PasswordHash
 
 class BcryptPasswordHasher:
     """
-    Адаптер для pwdlib (bcrypt). Параметры подобраны для разумного времени
-    хэширования (~250мс на современном CPU) без CPU-голодания event loop.
+    Адаптер для pwdlib. Использует `PasswordHash.recommended()` — это
+    argon2id (primary) с возможностью верификации старых bcrypt-хэшей
+    (backward-compatible если кто-то заводил юзеров на предыдущей версии).
+
+    Имя класса оставлено для совместимости с импортами в коде.
     """
 
     def __init__(self) -> None:
