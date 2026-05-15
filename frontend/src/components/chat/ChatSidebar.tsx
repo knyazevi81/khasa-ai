@@ -31,6 +31,9 @@ export function ChatSidebar({ activeChatId, reloadKey = 0 }: Props) {
   const [chats, setChats] = useState<ChatDTO[]>([]);
   const [creating, setCreating] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  // id чата для которого открыто контекстное меню действий (скрыть / удалить).
+  // Только одно меню открыто одновременно — упрощает закрытие по outside-click.
+  const [chatMenuOpenId, setChatMenuOpenId] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
   // Закрываем меню профиля по клику снаружи
@@ -42,6 +45,19 @@ export function ChatSidebar({ activeChatId, reloadKey = 0 }: Props) {
     document.addEventListener("click", onDocClick);
     return () => document.removeEventListener("click", onDocClick);
   }, []);
+
+  // Закрываем chat-context-меню по клику снаружи. Используем capture-фазу
+  // чтобы клики по другим item'ам тоже закрывали меню до их собственного хендлера.
+  useEffect(() => {
+    if (!chatMenuOpenId) return;
+    function onDocClick(e: MouseEvent) {
+      const target = e.target as HTMLElement;
+      if (target.closest(`[data-chat-menu="${chatMenuOpenId}"]`)) return;
+      setChatMenuOpenId(null);
+    }
+    document.addEventListener("click", onDocClick, true);
+    return () => document.removeEventListener("click", onDocClick, true);
+  }, [chatMenuOpenId]);
 
   useEffect(() => {
     if (!user) return;
@@ -105,8 +121,17 @@ export function ChatSidebar({ activeChatId, reloadKey = 0 }: Props) {
           <ul className={styles.list}>
             {chats.map((c) => {
               const isActive = c.id === activeChatId;
+              const isMenuOpen = chatMenuOpenId === c.id;
               return (
-                <li key={c.id}>
+                <li
+                  key={c.id}
+                  className={styles.itemWrap}
+                  data-chat-menu={c.id}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setChatMenuOpenId(isMenuOpen ? null : c.id);
+                  }}
+                >
                   <Link
                     href={`/chat/${c.id}`}
                     className={`${styles.item} ${isActive ? styles.itemActive : ""}`}
@@ -119,6 +144,62 @@ export function ChatSidebar({ activeChatId, reloadKey = 0 }: Props) {
                       </span>
                     )}
                   </Link>
+                  <button
+                    className={styles.itemMenuBtn}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setChatMenuOpenId(isMenuOpen ? null : c.id);
+                    }}
+                    title="действия"
+                  >
+                    ⋯
+                  </button>
+                  {isMenuOpen && (
+                    <div
+                      className={styles.chatMenu}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <button
+                        className={styles.chatMenuItem}
+                        onClick={async () => {
+                          setChatMenuOpenId(null);
+                          try {
+                            await api.chats.hide(c.id);
+                            setChats((prev) => prev.filter((x) => x.id !== c.id));
+                            if (c.id === activeChatId) router.push("/chat");
+                          } catch (e) {
+                            alert(`Не удалось скрыть: ${e instanceof Error ? e.message : ""}`);
+                          }
+                        }}
+                      >
+                        <span className={styles.menuIcon}>◎</span>
+                        <span>скрыть из истории</span>
+                      </button>
+                      <button
+                        className={`${styles.chatMenuItem} ${styles.chatMenuDanger}`}
+                        onClick={async () => {
+                          setChatMenuOpenId(null);
+                          if (
+                            !confirm(
+                              `Удалить чат «${c.title}» НАВСЕГДА?\n\nЭто также удалит все сообщения, артефакты и контейнер-песочницу. Восстановить нельзя.`,
+                            )
+                          )
+                            return;
+                          try {
+                            await api.chats.delete(c.id);
+                            setChats((prev) => prev.filter((x) => x.id !== c.id));
+                            if (c.id === activeChatId) router.push("/chat");
+                          } catch (e) {
+                            alert(`Не удалось удалить: ${e instanceof Error ? e.message : ""}`);
+                          }
+                        }}
+                      >
+                        <span className={styles.menuIcon}>✕</span>
+                        <span>удалить навсегда</span>
+                      </button>
+                    </div>
+                  )}
                 </li>
               );
             })}

@@ -14,7 +14,11 @@ from app.infrastructure.database.repositories.chats import SQLChatRepository
 from app.infrastructure.database.repositories.llm_credentials import (
     SQLLLMCredentialRepository,
 )
+from app.infrastructure.database.repositories.mcp_servers import (
+    SQLMCPServerRepository,
+)
 from app.infrastructure.database.repositories.messages import SQLMessageRepository
+from app.infrastructure.database.repositories.sandboxes import SQLSandboxRepository
 from app.infrastructure.database.repositories.system_prompts import (
     SQLSystemPromptRepository,
 )
@@ -25,10 +29,7 @@ from app.infrastructure.database.repositories.verification_codes import (
 
 
 class UnitOfWork(AbstractUnitOfWork):
-    """
-    Один UoW на запрос. Открывает репозитории, commit-ит на удачном выходе,
-    rollback-ит на исключении.
-    """
+    """Один UoW на запрос."""
 
     users: SQLUserRepository
     verification_codes: SQLVerificationCodeRepository
@@ -40,6 +41,8 @@ class UnitOfWork(AbstractUnitOfWork):
     artifacts: SQLArtifactRepository
     artifact_versions: SQLArtifactVersionRepository
     system_prompts: SQLSystemPromptRepository
+    sandboxes: SQLSandboxRepository
+    mcp_servers: SQLMCPServerRepository
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -55,6 +58,8 @@ class UnitOfWork(AbstractUnitOfWork):
         self.artifacts = SQLArtifactRepository(self.session)
         self.artifact_versions = SQLArtifactVersionRepository(self.session)
         self.system_prompts = SQLSystemPromptRepository(self.session)
+        self.sandboxes = SQLSandboxRepository(self.session)
+        self.mcp_servers = SQLMCPServerRepository(self.session)
         return self
 
     async def __aexit__(self, exc_type, *args) -> None:

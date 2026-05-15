@@ -9,7 +9,21 @@ import type { UserDTO } from "@/lib/api-types";
 import { KHASA } from "@/styles/tokens";
 import styles from "./admin.module.css";
 
-type Tab = "pending" | "all";
+type Tab = "pending" | "all" | "sandboxes";
+
+interface SandboxRow {
+  id: string;
+  chat_id: string;
+  user_id: string;
+  container_id: string | null;
+  container_name: string;
+  image: string;
+  status_db: string;
+  status_live: string | null;
+  workspace_path: string;
+  last_used_at: string | null;
+  error: string | null;
+}
 
 export default function AdminPage() {
   const router = useRouter();
@@ -18,8 +32,13 @@ export default function AdminPage() {
   const [tab, setTab] = useState<Tab>("pending");
   const [pending, setPending] = useState<UserDTO[] | null>(null);
   const [all, setAll] = useState<UserDTO[] | null>(null);
+  const [sandboxes, setSandboxes] = useState<SandboxRow[] | null>(null);
   const [notice, setNotice] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [acting, setActing] = useState<string | null>(null);
+  const [execTarget, setExecTarget] = useState<SandboxRow | null>(null);
+  const [execCommand, setExecCommand] = useState("");
+  const [execOutput, setExecOutput] = useState<{ exit: number; stdout: string; stderr: string } | null>(null);
+  const [execRunning, setExecRunning] = useState(false);
 
   useEffect(() => {
     bootstrap();
@@ -62,12 +81,26 @@ export default function AdminPage() {
     }
   }, []);
 
+  const loadSandboxes = useCallback(async () => {
+    try {
+      const r = await api.sandbox.adminList();
+      setSandboxes(r.sandboxes);
+    } catch (err) {
+      if (err instanceof ApiHttpError) {
+        setNotice({ kind: "err", text: `${err.status}: ${err.detail}` });
+      } else {
+        setNotice({ kind: "err", text: String(err) });
+      }
+    }
+  }, []);
+
   useEffect(() => {
     if (user?.is_superuser) {
       loadPending();
       loadAll();
+      loadSandboxes();
     }
-  }, [user, loadPending, loadAll]);
+  }, [user, loadPending, loadAll, loadSandboxes]);
 
   const activate = async (id: string, email: string) => {
     setActing(id);
@@ -93,6 +126,44 @@ export default function AdminPage() {
       await api.users.deactivate(id);
       setNotice({ kind: "ok", text: `${email} деактивирован` });
       await loadAll();
+    } catch (err) {
+      if (err instanceof ApiHttpError) {
+        setNotice({ kind: "err", text: `${err.status}: ${err.detail}` });
+      } else {
+        setNotice({ kind: "err", text: String(err) });
+      }
+    } finally {
+      setActing(null);
+    }
+  };
+
+  // ── sandbox actions ──────────────────────────────────────────────────────
+
+  const runExec = async () => {
+    if (!execTarget || !execCommand.trim()) return;
+    setExecRunning(true);
+    setExecOutput(null);
+    try {
+      const r = await api.sandbox.adminExec(execTarget.id, execCommand);
+      setExecOutput({ exit: r.exit_code, stdout: r.stdout, stderr: r.stderr });
+    } catch (err) {
+      setExecOutput({
+        exit: -1,
+        stdout: "",
+        stderr: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setExecRunning(false);
+    }
+  };
+
+  const removeSandbox = async (sb: SandboxRow) => {
+    if (!confirm(`Удалить контейнер ${sb.container_name}?`)) return;
+    setActing(sb.id);
+    try {
+      await api.sandbox.adminRemove(sb.id);
+      setNotice({ kind: "ok", text: `контейнер ${sb.container_name} удалён` });
+      await loadSandboxes();
     } catch (err) {
       if (err instanceof ApiHttpError) {
         setNotice({ kind: "err", text: `${err.status}: ${err.detail}` });
@@ -153,6 +224,13 @@ export default function AdminPage() {
           <span>все пользователи</span>
           {all && <span className={styles.badge}>{all.length}</span>}
         </button>
+        <button
+          className={`${styles.tab} ${tab === "sandboxes" ? styles.active : ""}`}
+          onClick={() => setTab("sandboxes")}
+        >
+          <span>контейнеры</span>
+          {sandboxes && <span className={styles.badge}>{sandboxes.length}</span>}
+        </button>
       </div>
 
       <div className={styles.content}>
@@ -182,14 +260,21 @@ export default function AdminPage() {
           <h2>
             {tab === "pending"
               ? "// заявки на одобрение"
-              : "// все пользователи"}
+              : tab === "all"
+                ? "// все пользователи"
+                : "// контейнеры-песочницы"}
           </h2>
           <span className={styles.meta}>
-            {tab === "pending" ? pending?.length ?? 0 : all?.length ?? 0} записей
+            {tab === "pending"
+              ? pending?.length ?? 0
+              : tab === "all"
+                ? all?.length ?? 0
+                : sandboxes?.length ?? 0}{" "}
+            записей
           </span>
         </div>
 
-        {rows.length === 0 ? (
+        {tab !== "sandboxes" && (rows.length === 0 ? (
           <div className={styles.empty}>
             {tab === "pending"
               ? "// очередь пуста — все заявки рассмотрены"
@@ -293,6 +378,184 @@ export default function AdminPage() {
               })}
             </tbody>
           </table>
+        ))}
+
+        {tab === "sandboxes" && (
+          sandboxes === null ? (
+            <div className={styles.empty}>// загрузка…</div>
+          ) : sandboxes.length === 0 ? (
+            <div className={styles.empty}>
+              // песочниц не создано (включи агентный режим в чате)
+            </div>
+          ) : (
+            <table className={styles.table}>
+              <thead>
+                <tr>
+                  <th>контейнер</th>
+                  <th>chat / user</th>
+                  <th>статус БД</th>
+                  <th>статус Docker</th>
+                  <th>image</th>
+                  <th style={{ textAlign: "right" }}>действия</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sandboxes.map((sb) => {
+                  const live = sb.status_live || "—";
+                  const liveColor =
+                    live === "running"
+                      ? "var(--green)"
+                      : live === "exited"
+                        ? "var(--red)"
+                        : "var(--muted)";
+                  return (
+                    <tr key={sb.id}>
+                      <td style={{ color: "var(--text)" }}>
+                        <code style={{ fontSize: 11 }}>{sb.container_name}</code>
+                        {sb.error && (
+                          <div style={{ color: "var(--red)", fontSize: 10 }}>
+                            err: {sb.error}
+                          </div>
+                        )}
+                      </td>
+                      <td>
+                        <code style={{ fontSize: 10, color: "var(--muted)" }}>
+                          {sb.chat_id.slice(0, 8)} / {sb.user_id.slice(0, 8)}
+                        </code>
+                      </td>
+                      <td>
+                        <span className={styles.pill}>{sb.status_db}</span>
+                      </td>
+                      <td>
+                        <span
+                          className={styles.pill}
+                          style={{ color: liveColor, borderColor: liveColor }}
+                        >
+                          {live}
+                        </span>
+                      </td>
+                      <td>
+                        <code style={{ fontSize: 10 }}>{sb.image}</code>
+                      </td>
+                      <td>
+                        <div className={styles.actions}>
+                          <button
+                            className={styles.smallBtn}
+                            onClick={() => {
+                              setExecTarget(sb);
+                              setExecCommand("");
+                              setExecOutput(null);
+                            }}
+                            disabled={!sb.container_id || live !== "running"}
+                          >
+                            exec
+                          </button>
+                          <button
+                            className={`${styles.smallBtn} ${styles.danger}`}
+                            onClick={() => removeSandbox(sb)}
+                            disabled={acting === sb.id}
+                          >
+                            удалить
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )
+        )}
+
+        {execTarget && (
+          <div
+            className={styles.notice}
+            style={{
+              marginTop: 16,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "stretch",
+              gap: 8,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <strong style={{ fontFamily: "var(--mono)", fontSize: 11 }}>
+                exec → {execTarget.container_name}
+              </strong>
+              <span style={{ flex: 1 }} />
+              <button
+                className={styles.smallBtn}
+                onClick={() => {
+                  setExecTarget(null);
+                  setExecOutput(null);
+                }}
+              >
+                закрыть
+              </button>
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <input
+                type="text"
+                value={execCommand}
+                onChange={(e) => setExecCommand(e.target.value)}
+                placeholder='например: ls -la /workspace'
+                style={{
+                  flex: 1,
+                  background: "var(--bg)",
+                  border: "1px solid var(--rule)",
+                  borderRadius: "var(--r-sm)",
+                  color: "var(--text)",
+                  fontFamily: "var(--mono)",
+                  fontSize: 12,
+                  padding: "8px 10px",
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") runExec();
+                }}
+              />
+              <button
+                className={`${styles.smallBtn} ${styles.primary}`}
+                onClick={runExec}
+                disabled={execRunning || !execCommand.trim()}
+              >
+                {execRunning ? "…" : "run"}
+              </button>
+            </div>
+            {execOutput && (
+              <div
+                style={{
+                  background: "var(--bg)",
+                  border: "1px solid var(--rule)",
+                  borderRadius: "var(--r-sm)",
+                  padding: "8px 10px",
+                  fontFamily: "var(--mono)",
+                  fontSize: 11.5,
+                  maxHeight: 320,
+                  overflow: "auto",
+                }}
+              >
+                <div style={{ color: "var(--muted)" }}>
+                  exit {execOutput.exit}
+                </div>
+                {execOutput.stdout && (
+                  <pre style={{ margin: "6px 0", whiteSpace: "pre-wrap" }}>
+                    {execOutput.stdout}
+                  </pre>
+                )}
+                {execOutput.stderr && (
+                  <pre
+                    style={{
+                      margin: "6px 0",
+                      whiteSpace: "pre-wrap",
+                      color: "var(--red)",
+                    }}
+                  >
+                    {execOutput.stderr}
+                  </pre>
+                )}
+              </div>
+            )}
+          </div>
         )}
       </div>
       </div>

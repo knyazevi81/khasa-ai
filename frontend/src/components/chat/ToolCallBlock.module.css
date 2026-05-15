@@ -1,0 +1,230 @@
+/*
+ * Минималистичный inline-стиль (как Claude.ai):
+ *   ⌗ bash · ls -la /workspace        ✓
+ * Никаких цветных рамок и больших боксов. Текст плотный, тон спокойный.
+ */
+
+.block {
+  margin: 6px 0;
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 0;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.header:hover {
+  color: var(--text);
+}
+
+.icon {
+  font-size: 10px;
+  width: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.toolName {
+  color: var(--muted);
+  font-weight: 500;
+  /* НЕ жёлтый — приглушённый, как у Claude */
+}
+
+.toolBrief {
+  color: var(--dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 480px;
+  font-style: italic;
+}
+
+.chev {
+  color: var(--dim);
+  font-size: 9px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.body {
+  margin-top: 6px;
+  margin-left: 20px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-left: 1px solid var(--rule);
+  padding-left: 12px;
+}
+
+.sectionLabel {
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin: 6px 0 4px;
+}
+
+.pre {
+  margin: 0;
+  padding: 8px 10px;
+  background: var(--surf);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  max-height: 240px;
+  overflow: auto;
+}
+
+/* ── present_files: гораздо мягче чем было ─────────────────────────────── */
+
+.filesBlock {
+  margin: 12px 0;
+  padding: 12px 14px;
+  background: var(--surf);
+  border: 1px solid var(--rule);
+  border-left: 2px solid var(--green);
+  border-radius: var(--r-md);
+}
+
+.filesHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.filesIcon {
+  font-size: 14px;
+}
+
+.filesTitle {
+  font-family: var(--sans);
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.filesAllBtn {
+  background: transparent;
+  border: 1px solid var(--rule);
+  color: var(--muted);
+  padding: 3px 10px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  border-radius: var(--r-sm);
+  text-decoration: none;
+}
+
+.filesAllBtn:hover {
+  color: var(--green);
+  border-color: var(--green);
+}
+
+.filesList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.fileItem {
+  list-style: none;
+}
+
+.fileLink {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  text-decoration: none;
+}
+
+.fileLink:hover .filePath {
+  color: var(--green);
+}
+
+.filePath {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: color 100ms;
+}
+
+.fileSize {
+  color: var(--dim);
+  font-size: 10px;
+}
+
+.fileDl {
+  color: var(--muted);
+  font-weight: 500;
+  width: 12px;
+  text-align: center;
+}
+
+.fileLink:hover .fileDl {
+  color: var(--green);
+}
+
+/* Заголовок-ссылка для случая когда файл один (вся коробка == скачка) */
+.filesTitleLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  font-family: var(--sans);
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--text);
+  text-decoration: none;
+  border-radius: var(--r-sm);
+  padding: 2px 4px;
+  margin: -2px -4px;
+  transition: color 100ms;
+}
+
+.filesTitleLink:hover {
+  color: var(--green);
+}
+
+.filesSizeBadge {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--dim);
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-sm);
+  padding: 1px 6px;
+  font-weight: 400;
+}
+
+.filesTitleLink:hover .filesSizeBadge {
+  border-color: var(--green);
+  color: var(--green);
+}

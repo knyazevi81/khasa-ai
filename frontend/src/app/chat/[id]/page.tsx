@@ -9,6 +9,7 @@ import { Markdown } from "@/components/chat/Markdown";
 import { ModelSelect } from "@/components/chat/ModelSelect";
 import { PromptSelect } from "@/components/chat/PromptSelect";
 import { SubtasksList } from "@/components/chat/SubtasksList";
+import { ToolCallBlock } from "@/components/chat/ToolCallBlock";
 import { BranchIcon } from "@/components/common/BranchIcon";
 import { useAuthStore } from "@/lib/auth-store";
 import { useChatStore } from "@/lib/chat-store";
@@ -28,6 +29,8 @@ export default function ChatDetail() {
     streaming,
     error,
     lastArtifactPush,
+    toolCallsByMessage,
+    truncatedMessages,
     loadChat,
     connect,
     disconnect,
@@ -112,8 +115,33 @@ export default function ChatDetail() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lastArtifactPush?.version_id]);
 
+  // Auto-scroll: только если юзер уже стоит примерно у низа (sticky-bottom).
+  // Если юзер сам отскроллил наверх — не трогаем, дадим ему читать.
+  // `instant` вместо `smooth` — чтобы во время стрима не было трясёт.
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const stickToBottomRef = useRef(true);
+
+  // Отслеживаем позицию юзера
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    function onScroll() {
+      if (!el) return;
+      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      // 80px — порог «у низа». Меньше → считаем что юзер хочет автоскролл
+      stickToBottomRef.current = distanceFromBottom < 80;
+    }
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []);
+
+  useEffect(() => {
+    if (!stickToBottomRef.current) return;
+    // requestAnimationFrame чтобы скроллить ПОСЛЕ того как layout посчитан
+    const id = requestAnimationFrame(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: "auto", block: "end" });
+    });
+    return () => cancelAnimationFrame(id);
   }, [messages, currentMessageId]);
 
   // Закрытие меню экспорта по клику вне его
@@ -329,24 +357,26 @@ export default function ChatDetail() {
               </button>
               {exportMenuOpen && (
                 <div className={styles.exportMenu}>
-                  <a
+                  <button
                     className={styles.exportItem}
-                    href={api.chats.exportUrl(chat.id, "md")}
-                    download
-                    onClick={() => setExportMenuOpen(false)}
+                    onClick={async () => {
+                      setExportMenuOpen(false);
+                      await downloadExport(chat.id, "md", chat.title);
+                    }}
                   >
                     <span className={styles.exportTag}>MD</span>
                     <span>скачать как markdown</span>
-                  </a>
-                  <a
+                  </button>
+                  <button
                     className={styles.exportItem}
-                    href={api.chats.exportUrl(chat.id, "json")}
-                    download
-                    onClick={() => setExportMenuOpen(false)}
+                    onClick={async () => {
+                      setExportMenuOpen(false);
+                      await downloadExport(chat.id, "json", chat.title);
+                    }}
                   >
                     <span className={styles.exportTag}>JSON</span>
                     <span>скачать как json</span>
-                  </a>
+                  </button>
                 </div>
               )}
             </div>
@@ -355,7 +385,7 @@ export default function ChatDetail() {
 
         {/* Messages */}
         <div className={styles.scroll}>
-          <div className={styles.messages}>
+          <div className={styles.messages} ref={scrollContainerRef}>
             {activeBranch.length === 0 ? (
               <div className={styles.emptyConvo}>
                 <div className={styles.emptyTitle}>
@@ -387,6 +417,9 @@ export default function ChatDetail() {
                     siblings={siblings}
                     chatId={chat.id}
                     chatAgentMode={chat.agent_mode}
+                    toolCalls={toolCallsByMessage[m.id] || []}
+                    truncated={truncatedMessages.has(m.id)}
+                    onContinue={() => sendMessage("продолжай", m.id)}
                     isEditing={isEditing}
                     editingContent={editingContent}
                     setEditingContent={setEditingContent}
@@ -517,6 +550,9 @@ interface MessageBlockProps {
   siblings: MessageDTO[];
   chatId: string;
   chatAgentMode: boolean;
+  toolCalls: import("@/lib/chat-types").ToolCallDTO[];
+  truncated: boolean;
+  onContinue: () => void;
   isEditing: boolean;
   editingContent: string;
   setEditingContent: (s: string) => void;
@@ -533,6 +569,9 @@ function MessageBlock({
   siblings,
   chatId,
   chatAgentMode,
+  toolCalls,
+  truncated,
+  onContinue,
   isEditing,
   editingContent,
   setEditingContent,
@@ -644,6 +683,34 @@ function MessageBlock({
         />
       )}
 
+      {/* tool calls (агент-режим: bash, read_file, present_files, ...) */}
+      {!isEditing && msg.role === "assistant" && toolCalls.length > 0 && (
+        <div className={styles.toolCalls}>
+          {toolCalls.map((call) => (
+            <ToolCallBlock key={call.id} call={call} chatId={chatId} />
+          ))}
+        </div>
+      )}
+
+      {/* Кнопка «продолжить» — если упёрлись в AGENT_MAX_TURNS */}
+      {!isEditing &&
+        msg.role === "assistant" &&
+        truncated &&
+        !streaming && (
+          <div className={styles.truncatedBox}>
+            <div className={styles.truncatedText}>
+              // упёрлись в лимит итераций tool-use. Модель не закончила.
+            </div>
+            <button
+              className={styles.continueBtn}
+              onClick={onContinue}
+              type="button"
+            >
+              продолжить →
+            </button>
+          </div>
+        )}
+
       {/* actions */}
       {!isEditing && (
         <div className={styles.msgActions}>
@@ -695,6 +762,42 @@ function MessageBlock({
 }
 
 // ── small ────────────────────────────────────────────────────────────────────
+
+/**
+ * Скачивает экспорт чата. Делаем через fetch+blob чтобы корректно отправить
+ * Authorization header — `<a href download>` это не умеет.
+ */
+async function downloadExport(
+  chatId: string,
+  format: "md" | "json",
+  chatTitle: string,
+): Promise<void> {
+  const { tokenStorage } = await import("@/lib/token-storage");
+  const token = tokenStorage.access;
+  const base = process.env.NEXT_PUBLIC_API_URL || "/api";
+  try {
+    const resp = await fetch(`${base}/v1/chats/${chatId}/export?format=${format}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!resp.ok) {
+      alert(`Не удалось скачать (${resp.status})`);
+      return;
+    }
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    const safeTitle =
+      chatTitle.replace(/[^\w\u0400-\u04FF\-_]+/g, "_").slice(0, 60) || "chat";
+    a.download = `${safeTitle}.${format}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    alert(`Ошибка: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
 
 function wordNodes(n: number) {
   const m10 = n % 10;

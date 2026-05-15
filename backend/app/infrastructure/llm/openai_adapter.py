@@ -40,17 +40,67 @@ class OpenAIAdapter(AbstractLLMService):
         base = credential.base_url or self.DEFAULT_BASE
         url = f"{base.rstrip('/')}/v1/chat/completions"
 
-        # OpenAI хочет system как первое сообщение в массиве
+        # OpenAI принимает content либо как строку, либо как массив частей.
+        # У нас в LLMMessage.content может быть list[dict] — это блоки в
+        # Anthropic-формате. Для OpenAI конвертируем:
+        #   text-блок → {"type": "text", "text": "..."} в content
+        #   tool_use  → assistant message с tool_calls[]
+        #   tool_result → отдельное message с role="tool"
         messages: list[dict] = []
         if request.system:
             messages.append({"role": "system", "content": request.system})
+
         for m in request.messages:
             if m.role == MessageRole.SYSTEM:
-                # система уже добавлена выше; дополнительные system-сообщения
-                # тоже пропустим внутрь — OpenAI разрешает несколько system
-                messages.append({"role": "system", "content": m.content})
-            else:
+                messages.append({"role": "system", "content": _stringify(m.content)})
+                continue
+
+            if isinstance(m.content, str):
                 messages.append({"role": m.role.value, "content": m.content})
+                continue
+
+            # list-content — конвертируем в OpenAI-формат
+            text_parts: list[str] = []
+            tool_calls: list[dict] = []
+            tool_results: list[dict] = []
+            for block in m.content:
+                btype = block.get("type")
+                if btype == "text":
+                    text_parts.append(block.get("text", ""))
+                elif btype == "tool_use":
+                    tool_calls.append({
+                        "id": block.get("id"),
+                        "type": "function",
+                        "function": {
+                            "name": block.get("name"),
+                            "arguments": json.dumps(block.get("input") or {}),
+                        },
+                    })
+                elif btype == "tool_result":
+                    tool_results.append({
+                        "role": "tool",
+                        "tool_call_id": block.get("tool_use_id"),
+                        "content": _stringify(block.get("content", "")),
+                    })
+
+            if m.role == MessageRole.ASSISTANT:
+                msg: dict = {"role": "assistant"}
+                if text_parts:
+                    msg["content"] = "\n".join(text_parts)
+                if tool_calls:
+                    msg["tool_calls"] = tool_calls
+                if "content" not in msg and not tool_calls:
+                    msg["content"] = ""
+                messages.append(msg)
+            elif m.role == MessageRole.USER:
+                # User-сообщение содержит либо текст, либо tool_result'ы
+                # (после исполнения tools мы кладём их в user-message с
+                # list-content). Если в одном куске и tool_result, и текст —
+                # отдадим tool_result'ы отдельными сообщениями + основное.
+                for tr in tool_results:
+                    messages.append(tr)
+                if text_parts:
+                    messages.append({"role": "user", "content": "\n".join(text_parts)})
 
         body: dict = {
             "model": request.model,
@@ -62,6 +112,18 @@ class OpenAIAdapter(AbstractLLMService):
             body["temperature"] = request.temperature
         if request.max_tokens is not None:
             body["max_tokens"] = request.max_tokens
+        if request.tools:
+            body["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.input_schema,
+                    },
+                }
+                for t in request.tools
+            ]
 
         headers = {
             "Authorization": f"Bearer {credential.secret}",
@@ -71,6 +133,9 @@ class OpenAIAdapter(AbstractLLMService):
 
         usage = LLMUsage()
         yield StreamEvent(type=StreamEventType.START)
+
+        # Аккумулятор tool_call'ов: OpenAI стримит их по частям с index'ами
+        tool_call_acc: dict[int, dict] = {}
 
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
@@ -105,6 +170,41 @@ class OpenAIAdapter(AbstractLLMService):
                                     type=StreamEventType.DELTA,
                                     text=text_chunk,
                                 )
+
+                            # Аккумулируем tool_calls
+                            for tc in delta.get("tool_calls") or []:
+                                idx = tc.get("index", 0)
+                                acc = tool_call_acc.setdefault(idx, {
+                                    "id": None,
+                                    "name": None,
+                                    "arguments": "",
+                                })
+                                if tc.get("id"):
+                                    acc["id"] = tc["id"]
+                                fn = tc.get("function") or {}
+                                if fn.get("name"):
+                                    acc["name"] = fn["name"]
+                                if fn.get("arguments"):
+                                    acc["arguments"] += fn["arguments"]
+
+                            finish = choices[0].get("finish_reason")
+                            if finish == "tool_calls":
+                                # Эмитим все собранные tool_use'ы
+                                for idx in sorted(tool_call_acc.keys()):
+                                    acc = tool_call_acc[idx]
+                                    try:
+                                        parsed_args = json.loads(acc["arguments"] or "{}")
+                                    except json.JSONDecodeError:
+                                        parsed_args = {}
+                                    yield StreamEvent(
+                                        type=StreamEventType.TOOL_USE,
+                                        raw={
+                                            "id": acc["id"],
+                                            "name": acc["name"],
+                                            "input": parsed_args,
+                                        },
+                                    )
+                                tool_call_acc.clear()
 
                         u = evt.get("usage")
                         if u:
@@ -164,3 +264,18 @@ _FALLBACK_OPENAI = [
     "gpt-4-turbo",
     "gpt-3.5-turbo",
 ]
+
+
+def _stringify(x) -> str:
+    """Превращает str/list/dict в строку для OpenAI content field."""
+    if isinstance(x, str):
+        return x
+    if isinstance(x, list):
+        parts: list[str] = []
+        for item in x:
+            if isinstance(item, dict) and item.get("type") == "text":
+                parts.append(item.get("text", ""))
+            elif isinstance(item, str):
+                parts.append(item)
+        return "\n".join(parts)
+    return str(x)

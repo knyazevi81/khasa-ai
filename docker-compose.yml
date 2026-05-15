@@ -39,6 +39,19 @@ services:
         condition: service_healthy
     volumes:
       - ./backend:/app:cached
+      # Доступ к Docker для управления sandbox-контейнерами
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Workspaces юзеров — bind-mount на директорию ./workspaces в репо.
+      # ВАЖНО: это bind, а не named volume — потому что backend передаёт
+      # путь /var/khasa/workspaces/<chat_id> Docker'у при создании sandbox-
+      # контейнеров, и этот путь должен быть валиден на ХОСТЕ. Bind на
+      # известную хост-директорию обеспечивает одинаковый путь для backend
+      # (через mount) и для sandbox (через docker-API).
+      - ./workspaces:/var/khasa/workspaces
+    environment:
+      # Тот же путь, как его видит Docker daemon (хост). Должен совпадать
+      # с тем что мы передали в bind-mount выше.
+      WORKSPACES_HOST_PATH: ${WORKSPACES_HOST_PATH:-${PWD}/workspaces}
     command: >
       sh -c "alembic upgrade head &&
              uvicorn app.presentation.fastapi.main:app --host 0.0.0.0 --port 8000 --reload"
@@ -75,3 +88,12 @@ services:
 
 volumes:
   postgres_data:
+
+networks:
+  default:
+    name: khasa_default
+  # Отдельная сеть для песочниц — изолирована от других сервисов.
+  # Backend подключён к default, а sandbox-контейнеры — к этой.
+  khasa_sandbox_net:
+    name: khasa_sandbox_net
+    driver: bridge

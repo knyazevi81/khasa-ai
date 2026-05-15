@@ -131,6 +131,9 @@ export default function SettingsPage() {
           <Link href="/settings/prompts" className={styles.tabLink}>
             · системные промпты
           </Link>
+          <Link href="/settings/mcp" className={styles.tabLink}>
+            · MCP-серверы
+          </Link>
           <span style={{ flex: 1 }} />
           <span className={styles.email}>{user.email}</span>
         </header>

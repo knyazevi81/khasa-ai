@@ -61,6 +61,7 @@ class Chat(BaseModel):
     model: str | None = None
     system_prompt: str | None = None
     agent_mode: bool = False
+    is_hidden: bool = False
     created_at: datetime | None = None
     updated_at: datetime | None = None
 

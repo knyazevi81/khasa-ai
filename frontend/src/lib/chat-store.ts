@@ -7,6 +7,7 @@ import type {
   ArtifactPushDTO,
   ChatDTO,
   MessageDTO,
+  ToolCallDTO,
   WSIncoming,
   WSOutgoing,
 } from "./chat-types";
@@ -23,6 +24,16 @@ interface ChatState {
   // Последний «push» обновления артефакта от сервера — фронт ArtifactPanel
   // подписан на это поле и сам перечитывает деталь.
   lastArtifactPush: ArtifactPushDTO | null;
+
+  // Tool-calls группируются по message_id (то assistant-сообщение, в чьём
+  // стриме они появились). Это позволяет UI рендерить блоки tool'ов прямо
+  // под содержимым сообщения, в порядке появления.
+  toolCallsByMessage: Record<string, ToolCallDTO[]>;
+
+  // Сообщения которые упёрлись в AGENT_MAX_TURNS — фронт показывает у них
+  // кнопку «продолжить» (отправляет новый user-msg «продолжай» и стримит
+  // дальше). Очищается при disconnect.
+  truncatedMessages: Set<string>;
 
   // actions
   loadChat: (id: string) => Promise<void>;
@@ -43,6 +54,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   error: null,
   ws: null,
   lastArtifactPush: null,
+  toolCallsByMessage: {},
+  truncatedMessages: new Set(),
 
   loadChat: async (id) => {
     const [chat, msgList] = await Promise.all([
@@ -110,7 +123,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
   disconnect: () => {
     const ws = get().ws;
     if (ws) ws.close();
-    set({ ws: null });
+    // Сбрасываем артефакт-push и tool-calls — при возврате в чат они подтянутся
+    // заново через ArtifactPanel/WS, а старое состояние не должно остаться.
+    set({
+      ws: null,
+      lastArtifactPush: null,
+      toolCallsByMessage: {},
+      truncatedMessages: new Set(),
+    });
   },
 
   sendMessage: (content, parentId) => {
@@ -252,6 +272,65 @@ function handleIncoming(
 
     case "artifact": {
       set({ lastArtifactPush: payload.artifact });
+      break;
+    }
+
+    case "tool_use": {
+      // К какому сообщению привязать? К текущему стримящемуся —
+      // currentMessageId всегда указывает на последний assistant-узел
+      const msgId = get().currentMessageId;
+      if (!msgId) break;
+      set((s) => {
+        const list = s.toolCallsByMessage[msgId] || [];
+        // Если такой id уже есть — обновим (возможно пришёл апдейт статуса)
+        const existing = list.find((c) => c.id === payload.id);
+        const status = (payload.status as ToolCallDTO["status"]) || "running";
+        const next: ToolCallDTO[] = existing
+          ? list.map((c) => (c.id === payload.id ? { ...c, status } : c))
+          : [
+              ...list,
+              {
+                id: payload.id,
+                name: payload.name,
+                input: payload.input,
+                status,
+              },
+            ];
+        return {
+          toolCallsByMessage: { ...s.toolCallsByMessage, [msgId]: next },
+        };
+      });
+      break;
+    }
+
+    case "tool_result": {
+      const msgId = get().currentMessageId;
+      if (!msgId) break;
+      set((s) => {
+        const list = s.toolCallsByMessage[msgId] || [];
+        const next = list.map((c) =>
+          c.id === payload.id
+            ? {
+                ...c,
+                status: "done" as const,
+                output: payload.output,
+                is_present_files: payload.is_present_files,
+              }
+            : c,
+        );
+        return {
+          toolCallsByMessage: { ...s.toolCallsByMessage, [msgId]: next },
+        };
+      });
+      break;
+    }
+
+    case "truncated": {
+      set((s) => {
+        const next = new Set(s.truncatedMessages);
+        next.add(payload.message_id);
+        return { truncatedMessages: next };
+      });
       break;
     }
   }

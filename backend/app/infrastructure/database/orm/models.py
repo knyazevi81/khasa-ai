@@ -120,6 +120,9 @@ class Chats(Base):
     # Включает агентный режим: ассистент сначала декомпозирует задачу на
     # подзадачи (AgentSubtasks), потом исполняет.
     agent_mode: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Soft-hide: чат не удалён, но не показывается в истории. Можно потом
+    # «восстановить» (TODO: UI для unhide).
+    is_hidden: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
 
 class Messages(Base):
@@ -293,3 +296,74 @@ class SystemPrompts(Base):
     # Эмодзи или короткий ярлык для UI («🐍», «✏️», «🌍»)
     icon: Mapped[str | None] = mapped_column(String(8), nullable=True)
     is_pinned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+
+# ── Sandboxes (docker containers per chat) ───────────────────────────────────
+
+
+class Sandboxes(Base):
+    """
+    Контейнер-песочница для чата. Один чат — один контейнер.
+    `container_id` обновляется при пересоздании контейнера (stop+rm+run).
+    Файлы юзера живут в `workspace_path` на хосте (bind-mount).
+    """
+    __tablename__ = "sandboxes"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    chat_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("chats.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    container_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    container_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    image: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="created")
+    workspace_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    last_used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+# ── MCP Servers (user-managed external tool providers) ───────────────────────
+
+
+class MCPServers(Base):
+    """
+    Подключенный MCP-сервер юзера. Сервер предоставляет инструменты,
+    которые становятся доступны LLM в любом чате этого юзера.
+    """
+    __tablename__ = "mcp_servers"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    description: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    # transport: sse | http | stdio (для stdio нужна команда, для http — URL)
+    transport: Mapped[str] = mapped_column(String(20), nullable=False)
+    url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Для stdio: команда + аргументы в JSON-массиве
+    command: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    # Доп. конфиг (env-переменные, headers и т.п.)
+    config: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    is_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # Кэш списка инструментов (обновляется при validate)
+    tools_cache: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)

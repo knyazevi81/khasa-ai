@@ -136,6 +136,26 @@ async def delete_chat(
     return MessageResponse(message="Чат удалён")
 
 
+@router.post("/{chat_id}/hide", response_model=MessageResponse)
+async def hide_chat(
+    chat_id: uuid.UUID,
+    current_user: Annotated[User, Depends(get_current_user)],
+    service: Annotated[ChatService, Depends(get_chat_service)],
+) -> MessageResponse:
+    await service.hide_chat(chat_id, current_user.id)
+    return MessageResponse(message="Чат скрыт")
+
+
+@router.post("/{chat_id}/unhide", response_model=MessageResponse)
+async def unhide_chat(
+    chat_id: uuid.UUID,
+    current_user: Annotated[User, Depends(get_current_user)],
+    service: Annotated[ChatService, Depends(get_chat_service)],
+) -> MessageResponse:
+    await service.unhide_chat(chat_id, current_user.id)
+    return MessageResponse(message="Чат восстановлен")
+
+
 # ── Граф (все сообщения чата) ────────────────────────────────────────────────
 
 
@@ -323,7 +343,7 @@ async def export_chat(
 
     # path-to-root по активному листу
     path = await service.uow.messages.get_path_to_root(chat.current_message_id)
-    safe_title = "".join(c if c.isalnum() or c in "-_." else "_" for c in chat.title)[:60] or "chat"
+    base_name = _safe_filename(chat.title)
 
     if format == "json":
         payload = {
@@ -348,7 +368,7 @@ async def export_chat(
         return Response(
             content=_json.dumps(payload, ensure_ascii=False, indent=2),
             media_type="application/json",
-            headers={"Content-Disposition": f'attachment; filename="{safe_title}.json"'},
+            headers=_disposition_headers(base_name, "json"),
         )
 
     # markdown
@@ -375,7 +395,7 @@ async def export_chat(
     return Response(
         content="".join(lines),
         media_type="text/markdown",
-        headers={"Content-Disposition": f'attachment; filename="{safe_title}.md"'},
+        headers=_disposition_headers(base_name, "md"),
     )
 
 
@@ -437,7 +457,24 @@ async def chat_stream(
             cipher = SecretCipher(settings.SECRET_CIPHER_KEY.get_secret_value())
             router_llm = get_llm_router()
             creds = LLMCredentialService(uow, cipher, router_llm)
-            chat_service = ChatServiceCls(uow, creds, router_llm)
+
+            # Полный набор зависимостей — иначе агентный режим в WS не работает
+            from app.application.use_cases.artifacts import ArtifactService
+            from app.application.use_cases.mcp_servers import MCPService
+            from app.application.use_cases.sandboxes import SandboxService
+            from app.presentation.fastapi.dependencies import (
+                get_sandbox_manager,
+                get_skill_registry,
+            )
+            chat_service = ChatServiceCls(
+                uow,
+                creds,
+                router_llm,
+                artifacts=ArtifactService(uow),
+                sandbox_service=SandboxService(uow, get_sandbox_manager()),
+                mcp_service=MCPService(uow),
+                skill_registry=get_skill_registry(),
+            )
 
             await websocket.accept()
 
@@ -622,6 +659,18 @@ async def _pump_stream(websocket, chat_service, chat, assistant_msg_id):
             await websocket.send_json(
                 {"type": "artifact", "artifact": event.raw}
             )
+        elif event.type == StreamEventType.TOOL_USE:
+            await websocket.send_json(
+                {"type": "tool_use", **(event.raw or {})}
+            )
+        elif event.type == StreamEventType.TOOL_RESULT:
+            await websocket.send_json(
+                {"type": "tool_result", **(event.raw or {})}
+            )
+        elif event.type == StreamEventType.TRUNCATED:
+            await websocket.send_json(
+                {"type": "truncated", **(event.raw or {})}
+            )
         elif event.type == StreamEventType.DONE:
             payload = {"type": "done", "message_id": str(assistant_msg_id)}
             if event.usage:
@@ -636,3 +685,45 @@ async def _pump_stream(websocket, chat_service, chat, assistant_msg_id):
                 }
             )
         # START — служебное, фронту не нужно
+
+
+# ── filename helpers (RFC 5987 для unicode-имён файлов) ──────────────────────
+
+
+def _safe_filename(title: str) -> str:
+    """
+    Превращает заголовок чата в безопасное «базовое» имя файла.
+    Сохраняет unicode-символы (они уйдут в filename* по RFC 5987), а из
+    ASCII-fallback'а убирает всё кроме alnum/_-. — для совместимости
+    со старыми браузерами и заголовком filename="..." (latin-1 only).
+    """
+    cleaned = title.strip() or "chat"
+    # Заменим всё что точно сломает имя файла на _
+    bad = '/\\:*?"<>|'
+    out: list[str] = []
+    for c in cleaned:
+        if c in bad or ord(c) < 32:
+            out.append("_")
+        else:
+            out.append(c)
+    return "".join(out)[:80]
+
+
+def _disposition_headers(name: str, ext: str) -> dict[str, str]:
+    """
+    Возвращает Content-Disposition с поддержкой unicode-имён.
+
+    RFC 6266 + 5987: даём ascii-fallback в `filename=` (с заменой не-ASCII
+    на `_`) и full UTF-8 в `filename*=` через percent-encoding. Современные
+    браузеры (Chrome/FF/Safari) предпочитают filename*, IE11 — fallback.
+    """
+    from urllib.parse import quote
+
+    full = f"{name}.{ext}"
+    ascii_fallback = full.encode("ascii", "replace").decode("ascii").replace("?", "_")
+    encoded = quote(full, safe="")
+    disposition = (
+        f'attachment; filename="{ascii_fallback}"; '
+        f"filename*=UTF-8''{encoded}"
+    )
+    return {"Content-Disposition": disposition}

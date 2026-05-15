@@ -1,4 +1,4 @@
-.PHONY: help up up-prod down logs restart migrate revision superuser shell-backend shell-frontend clean
+.PHONY: help up up-prod down logs restart migrate revision superuser shell-backend shell-frontend sandbox-build clean
 
 help:
 	@echo "khasa — make targets"
@@ -11,6 +11,7 @@ help:
 	@echo "  migrate          alembic upgrade head"
 	@echo "  revision m=..    создать миграцию: make revision m='add_chats'"
 	@echo "  superuser e=... p=...   создать суперюзера"
+	@echo "  sandbox-build    собрать образ khasa-sandbox:latest для агентного режима"
 	@echo "  shell-backend    bash в backend-контейнере"
 	@echo "  shell-frontend   sh в frontend-контейнере"
 	@echo "  clean            down + удалить volume postgres_data"
@@ -38,6 +39,9 @@ revision:
 
 superuser:
 	docker compose exec backend python -m app.scripts.create_superuser "$(e)" "$(p)"
+
+sandbox-build:
+	docker build -t khasa-sandbox:latest backend/sandbox/
 
 shell-backend:
 	docker compose exec backend bash

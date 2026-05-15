@@ -66,7 +66,10 @@ export type WSIncoming =
   | { type: "delta"; message_id: string; text: string }
   | { type: "done"; message_id: string; usage?: { input_tokens: number; output_tokens: number } }
   | { type: "error"; message_id?: string; error: string }
-  | { type: "artifact"; artifact: ArtifactPushDTO };
+  | { type: "artifact"; artifact: ArtifactPushDTO }
+  | { type: "tool_use"; id: string; name: string; input: Record<string, any>; status?: "running" | "done" | "error" }
+  | { type: "tool_result"; id: string; name: string; output: string; is_present_files?: boolean }
+  | { type: "truncated"; reason: string; max_turns: number; message_id: string };
 
 export type WSOutgoing =
   | { type: "send"; content: string; parent_id?: string | null }
@@ -127,4 +130,51 @@ export interface SystemPromptDTO {
 export interface SystemPromptListDTO {
   prompts: SystemPromptDTO[];
   total: number;
+}
+
+// ── Tool calls (agent mode) ─────────────────────────────────────────────────
+
+export interface ToolCallDTO {
+  id: string;
+  name: string;
+  input: Record<string, any>;
+  status: "running" | "done" | "error";
+  output?: string;
+  is_present_files?: boolean;
+}
+
+// ── Sandbox / files ─────────────────────────────────────────────────────────
+
+export interface SandboxDTO {
+  id: string;
+  chat_id: string;
+  user_id: string;
+  container_id: string | null;
+  container_name: string;
+  image: string;
+  status: string;
+  workspace_path: string;
+  last_used_at: string | null;
+  error: string | null;
+}
+
+export interface FileEntryDTO {
+  path: string;
+  is_dir: boolean;
+  size: number;
+  modified_at: number;
+}
+
+// ── MCP ─────────────────────────────────────────────────────────────────────
+
+export interface MCPServerDTO {
+  id: string;
+  name: string;
+  description: string | null;
+  transport: "sse" | "http" | "stdio";
+  url: string | null;
+  command: Record<string, any> | null;
+  config: Record<string, any> | null;
+  is_enabled: boolean;
+  tools_cache: { tools?: Array<{ name: string; description: string; input_schema?: any }> } | null;
 }

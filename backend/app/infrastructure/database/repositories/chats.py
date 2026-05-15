@@ -36,12 +36,14 @@ class SQLChatRepository(ModelBaseRepository[Chats]):
         result = await self.session.execute(select(Chats).filter_by(**filter_by))
         return [Chat.model_validate(o) for o in result.scalars().all()]
 
-    async def find_for_user(self, user_id: uuid.UUID) -> list[Chat]:
-        result = await self.session.execute(
-            select(Chats)
-            .where(Chats.user_id == user_id)
-            .order_by(desc(Chats.updated_at))
-        )
+    async def find_for_user(
+        self, user_id: uuid.UUID, include_hidden: bool = False
+    ) -> list[Chat]:
+        stmt = select(Chats).where(Chats.user_id == user_id)
+        if not include_hidden:
+            stmt = stmt.where(Chats.is_hidden == False)  # noqa: E712
+        stmt = stmt.order_by(desc(Chats.updated_at))
+        result = await self.session.execute(stmt)
         return [Chat.model_validate(o) for o in result.scalars().all()]
 
     async def add(self, **data) -> None:

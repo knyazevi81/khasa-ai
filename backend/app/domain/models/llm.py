@@ -29,9 +29,17 @@ class FileKind(StrEnum):
 # ── Данные для LLM-вызова ─────────────────────────────────────────────────────
 
 class LLMMessage(BaseModel):
-    """Сообщение в формате, который понимают все провайдеры."""
+    """
+    Сообщение в формате, который понимают все провайдеры.
+
+    Контент может быть:
+      • строкой — обычный текст;
+      • списком блоков — для tool use (text-блоки + tool_use + tool_result).
+        Это нужно когда LLM в одном ответе пишет «сейчас сделаю X» и сразу
+        вызывает инструмент.
+    """
     role: MessageRole
-    content: str
+    content: str | list[dict[str, Any]]
 
 
 class LLMRequest(BaseModel):
@@ -40,6 +48,7 @@ class LLMRequest(BaseModel):
     system: str | None = None
     temperature: float | None = None
     max_tokens: int | None = None
+    tools: list[ToolDefinition] | None = None
 
 
 class LLMUsage(BaseModel):
@@ -57,6 +66,42 @@ class StreamEventType(StrEnum):
     # Эмитится use-case'ом (не адаптером): когда мы распарсили из стрима
     # обновлённый артефакт. Полезная нагрузка в `raw`: {"artifact_id", ...}.
     ARTIFACT = "artifact"
+    # Адаптер запросил вызов инструмента (tool_use из Anthropic / function_call
+    # из OpenAI). Полезная нагрузка в `raw`: {"id", "name", "input"}.
+    # После исполнения use-case добавляет tool_result в историю и шлёт
+    # модели новый запрос.
+    TOOL_USE = "tool_use"
+    # Use-case эмитит до/после выполнения инструмента — для UI.
+    TOOL_RESULT = "tool_result"
+    # Стрим оборвался из-за лимита итераций tool-use (не error, штатно).
+    # Фронт покажет кнопку «продолжить».
+    TRUNCATED = "truncated"
+
+
+# ── Tools ─────────────────────────────────────────────────────────────────────
+
+class ToolDefinition(BaseModel):
+    """
+    Описание инструмента, которое отправляется в LLM (Anthropic/OpenAI format).
+    `input_schema` — JSON Schema параметров.
+    """
+    name: str
+    description: str
+    input_schema: dict[str, Any]
+
+
+class ToolUseRequest(BaseModel):
+    """Модель попросила вызвать инструмент."""
+    id: str                    # tool_use_id (нужен чтобы матчить результат)
+    name: str
+    input: dict[str, Any]
+
+
+class ToolUseResult(BaseModel):
+    """Результат вызова инструмента — отдаётся обратно в LLM."""
+    tool_use_id: str
+    content: str               # plain текст (или сериализованный JSON)
+    is_error: bool = False
 
 
 class StreamEvent(BaseModel):

@@ -13,7 +13,12 @@ from app.presentation.fastapi.routers.artifacts import router as artifacts_route
 from app.presentation.fastapi.routers.auth import router as auth_router
 from app.presentation.fastapi.routers.chats import router as chats_router
 from app.presentation.fastapi.routers.llm import router as llm_router
+from app.presentation.fastapi.routers.mcp_servers import router as mcp_router
 from app.presentation.fastapi.routers.ping import router as ping_router
+from app.presentation.fastapi.routers.sandboxes import (
+    admin_router as sandboxes_admin_router,
+    chat_router as sandboxes_chat_router,
+)
 from app.presentation.fastapi.routers.system_prompts import router as system_prompts_router
 from app.presentation.fastapi.routers.users import router as users_router
 
@@ -25,6 +30,30 @@ logger = logging.getLogger("khasa")
 async def lifespan(_app: FastAPI):
     configure_logging()
     logger.info("khasa: started")
+
+    # Preflight: проверка наличия sandbox-образа.
+    # Если есть доступ к docker.sock и образа нет — выведем warning.
+    # Это не fatal: бэк прекрасно работает без агентного режима.
+    try:
+        import docker
+        from docker.errors import DockerException, ImageNotFound
+        try:
+            client = docker.from_env()
+            client.images.get("khasa-sandbox:latest")
+            logger.info("khasa: sandbox image OK")
+        except ImageNotFound:
+            logger.warning(
+                "khasa: sandbox image not built — agent mode will not work. "
+                "Run: make sandbox-build  "
+                "(or: docker build -t khasa-sandbox:latest backend/sandbox/)"
+            )
+        except DockerException as exc:
+            logger.warning(
+                "khasa: docker not accessible — agent mode disabled (%s)", exc
+            )
+    except ImportError:
+        logger.warning("khasa: `docker` package not installed")
+
     yield
     logger.info("khasa: stopped")
 
@@ -56,6 +85,9 @@ def create_application() -> FastAPI:
     app.include_router(chats_router, prefix=prefix)
     app.include_router(artifacts_router, prefix=prefix)
     app.include_router(system_prompts_router, prefix=prefix)
+    app.include_router(sandboxes_chat_router, prefix=prefix)
+    app.include_router(sandboxes_admin_router, prefix=prefix)
+    app.include_router(mcp_router, prefix=prefix)
     app.include_router(ping_router, prefix=prefix)
 
     @app.get("/health/live")

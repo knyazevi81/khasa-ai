@@ -22,11 +22,14 @@ import type {
   ArtifactListDTO,
   ChatDTO,
   ChatsListDTO,
+  FileEntryDTO,
   LLMCredentialDTO,
   LLMCredentialsListDTO,
+  MCPServerDTO,
   MessageDTO as ChatMessageDTO,
   MessagesListDTO,
   ParsedFileDTO,
+  SandboxDTO,
   SystemPromptDTO,
   SystemPromptListDTO,
 } from "./chat-types";
@@ -262,6 +265,10 @@ export const api = {
       request<ChatDTO>(`/chats/${id}`, { method: "PATCH", body, auth: true }),
     delete: (id: string) =>
       request<MessageDTO>(`/chats/${id}`, { method: "DELETE", auth: true }),
+    hide: (id: string) =>
+      request<MessageDTO>(`/chats/${id}/hide`, { method: "POST", auth: true }),
+    unhide: (id: string) =>
+      request<MessageDTO>(`/chats/${id}/unhide`, { method: "POST", auth: true }),
     messages: (id: string) =>
       request<MessagesListDTO>(`/chats/${id}/messages`, { auth: true }),
     switchBranch: (id: string, messageId: string) =>
@@ -376,6 +383,112 @@ export const api = {
         method: "DELETE",
         auth: true,
       }),
+  },
+
+  sandbox: {
+    getOrCreate: (chatId: string) =>
+      request<SandboxDTO>(`/chats/${chatId}/sandbox`, { auth: true }),
+    remove: (chatId: string) =>
+      request<MessageDTO>(`/chats/${chatId}/sandbox`, {
+        method: "DELETE",
+        auth: true,
+      }),
+    listFiles: (chatId: string, subdir = "") =>
+      request<{ files: FileEntryDTO[]; workspace: string }>(
+        `/chats/${chatId}/files/?subdir=${encodeURIComponent(subdir)}`,
+        { auth: true },
+      ),
+    downloadFileUrl: (chatId: string, path: string): string => {
+      const token = tokenStorage.access;
+      const u = new URL(
+        `${BASE}/v1/chats/${chatId}/files/download`,
+        window.location.origin,
+      );
+      u.searchParams.set("path", path);
+      if (token) u.searchParams.set("access_token", token);
+      return u.toString();
+    },
+    zipUrl: (chatId: string): string => {
+      const token = tokenStorage.access;
+      const u = new URL(
+        `${BASE}/v1/chats/${chatId}/files.zip`,
+        window.location.origin,
+      );
+      if (token) u.searchParams.set("access_token", token);
+      return u.toString();
+    },
+
+    adminList: () =>
+      request<{
+        sandboxes: Array<{
+          id: string;
+          chat_id: string;
+          user_id: string;
+          container_id: string | null;
+          container_name: string;
+          image: string;
+          status_db: string;
+          status_live: string | null;
+          workspace_path: string;
+          last_used_at: string | null;
+          error: string | null;
+        }>;
+        total: number;
+      }>("/admin/sandboxes/", { auth: true }),
+    adminExec: (sandboxId: string, command: string, timeout = 60) =>
+      request<{ exit_code: number; stdout: string; stderr: string }>(
+        `/admin/sandboxes/${sandboxId}/exec`,
+        { method: "POST", body: { command, timeout }, auth: true },
+      ),
+    adminRemove: (sandboxId: string) =>
+      request<MessageDTO>(`/admin/sandboxes/${sandboxId}`, {
+        method: "DELETE",
+        auth: true,
+      }),
+  },
+
+  mcp: {
+    list: () =>
+      request<{ servers: MCPServerDTO[]; total: number }>("/mcp-servers/", {
+        auth: true,
+      }),
+    create: (body: {
+      name: string;
+      description?: string | null;
+      transport: "sse" | "http" | "stdio";
+      url?: string | null;
+      command?: Record<string, any> | null;
+      config?: Record<string, any> | null;
+    }) =>
+      request<MCPServerDTO>("/mcp-servers/", {
+        method: "POST",
+        body,
+        auth: true,
+      }),
+    update: (id: string, body: Partial<{
+      name: string;
+      description: string | null;
+      transport: "sse" | "http" | "stdio";
+      url: string | null;
+      command: Record<string, any> | null;
+      config: Record<string, any> | null;
+      is_enabled: boolean;
+    }>) =>
+      request<MCPServerDTO>(`/mcp-servers/${id}`, {
+        method: "PATCH",
+        body,
+        auth: true,
+      }),
+    delete: (id: string) =>
+      request<MessageDTO>(`/mcp-servers/${id}`, {
+        method: "DELETE",
+        auth: true,
+      }),
+    validate: (id: string) =>
+      request<{ tools: Array<{ name: string; description: string; input_schema: any }> }>(
+        `/mcp-servers/${id}/validate`,
+        { method: "POST", auth: true },
+      ),
   },
 };
 

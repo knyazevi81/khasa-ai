@@ -40,12 +40,12 @@ class AnthropicAdapter(AbstractLLMService):
         base = credential.base_url or self.DEFAULT_BASE
         url = f"{base.rstrip('/')}/v1/messages"
 
-        # Anthropic не принимает system как сообщение — выносим отдельно
-        messages = [
-            {"role": m.role.value, "content": m.content}
-            for m in request.messages
-            if m.role in (MessageRole.USER, MessageRole.ASSISTANT)
-        ]
+        # Anthropic принимает контент как string или list[block]. У нас domain
+        # LLMMessage.content уже умеет быть list — передаём как есть.
+        messages: list[dict] = []
+        for m in request.messages:
+            if m.role in (MessageRole.USER, MessageRole.ASSISTANT):
+                messages.append({"role": m.role.value, "content": m.content})
 
         body: dict = {
             "model": request.model,
@@ -57,6 +57,16 @@ class AnthropicAdapter(AbstractLLMService):
             body["system"] = request.system
         if request.temperature is not None:
             body["temperature"] = request.temperature
+        # Tool use: пробрасываем список инструментов и схему
+        if request.tools:
+            body["tools"] = [
+                {
+                    "name": t.name,
+                    "description": t.description,
+                    "input_schema": t.input_schema,
+                }
+                for t in request.tools
+            ]
 
         headers = {
             "x-api-key": credential.secret,
@@ -67,6 +77,10 @@ class AnthropicAdapter(AbstractLLMService):
 
         usage = LLMUsage()
         yield StreamEvent(type=StreamEventType.START)
+
+        # Состояние парсинга стрима. У Anthropic несколько content_block-ов,
+        # каждый со своим индексом. Нам важны text и tool_use.
+        current_blocks: dict[int, dict] = {}  # index -> {type, ...}
 
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
@@ -91,13 +105,54 @@ class AnthropicAdapter(AbstractLLMService):
                             continue
 
                         et = evt.get("type")
-                        if et == "content_block_delta":
+
+                        if et == "content_block_start":
+                            idx = evt.get("index", 0)
+                            block = evt.get("content_block") or {}
+                            current_blocks[idx] = {
+                                "type": block.get("type"),
+                                "id": block.get("id"),
+                                "name": block.get("name"),
+                                "input_buffer": "",
+                            }
+
+                        elif et == "content_block_delta":
+                            idx = evt.get("index", 0)
                             delta = evt.get("delta", {})
-                            if delta.get("type") == "text_delta":
+                            block = current_blocks.get(idx, {})
+                            dt = delta.get("type")
+                            if dt == "text_delta":
                                 yield StreamEvent(
                                     type=StreamEventType.DELTA,
                                     text=delta.get("text", ""),
                                 )
+                            elif dt == "input_json_delta":
+                                # Anthropic стримит JSON параметров tool_use по частям
+                                block["input_buffer"] = (
+                                    block.get("input_buffer", "")
+                                    + delta.get("partial_json", "")
+                                )
+
+                        elif et == "content_block_stop":
+                            idx = evt.get("index", 0)
+                            block = current_blocks.get(idx)
+                            if block and block.get("type") == "tool_use":
+                                # Соберём полный input и эмитим TOOL_USE
+                                try:
+                                    parsed_input = json.loads(
+                                        block.get("input_buffer") or "{}"
+                                    )
+                                except json.JSONDecodeError:
+                                    parsed_input = {}
+                                yield StreamEvent(
+                                    type=StreamEventType.TOOL_USE,
+                                    raw={
+                                        "id": block.get("id"),
+                                        "name": block.get("name"),
+                                        "input": parsed_input,
+                                    },
+                                )
+
                         elif et == "message_delta":
                             u = evt.get("usage", {})
                             usage.output_tokens += u.get("output_tokens", 0)
