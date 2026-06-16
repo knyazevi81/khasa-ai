@@ -63,12 +63,12 @@ export interface ParsedFileDTO {
 export type WSIncoming =
   | { type: "user_message_created"; message: MessageDTO }
   | { type: "assistant_message_created"; message: MessageDTO }
-  | { type: "delta"; message_id: string; text: string }
+  | { type: "delta"; message_id: string; text: string; segment_id?: string | null; order_idx?: number }
   | { type: "done"; message_id: string; usage?: { input_tokens: number; output_tokens: number } }
   | { type: "error"; message_id?: string; error: string }
   | { type: "artifact"; artifact: ArtifactPushDTO }
-  | { type: "tool_use"; id: string; name: string; input: Record<string, any>; status?: "running" | "done" | "error" }
-  | { type: "tool_result"; id: string; name: string; output: string; is_present_files?: boolean }
+  | { type: "tool_use"; id: string; name: string; input: Record<string, any>; status?: "running" | "done" | "error"; order_idx?: number }
+  | { type: "tool_result"; id: string; name: string; output: string; is_present_files?: boolean; order_idx?: number }
   | { type: "truncated"; reason: string; max_turns: number; message_id: string };
 
 export type WSOutgoing =
@@ -178,3 +178,18 @@ export interface MCPServerDTO {
   is_enabled: boolean;
   tools_cache: { tools?: Array<{ name: string; description: string; input_schema?: any }> } | null;
 }
+
+// ── Message segments (interleaved text + tools) ─────────────────────────────
+
+export type MessageSegment =
+  | { kind: "text"; order_idx: number; id: string; content: string }
+  | {
+      kind: "tool_call";
+      order_idx: number;
+      id: string;
+      name: string;
+      input: Record<string, any>;
+      output: string | null;
+      status: "running" | "done" | "error";
+      is_present_files: boolean;
+    };

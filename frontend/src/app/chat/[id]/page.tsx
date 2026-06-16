@@ -30,6 +30,7 @@ export default function ChatDetail() {
     error,
     lastArtifactPush,
     toolCallsByMessage,
+    segmentsByMessage,
     truncatedMessages,
     loadChat,
     connect,
@@ -418,6 +419,7 @@ export default function ChatDetail() {
                     chatId={chat.id}
                     chatAgentMode={chat.agent_mode}
                     toolCalls={toolCallsByMessage[m.id] || []}
+                    segments={segmentsByMessage[m.id] || []}
                     truncated={truncatedMessages.has(m.id)}
                     onContinue={() => sendMessage("продолжай", m.id)}
                     isEditing={isEditing}
@@ -551,6 +553,7 @@ interface MessageBlockProps {
   chatId: string;
   chatAgentMode: boolean;
   toolCalls: import("@/lib/chat-types").ToolCallDTO[];
+  segments: import("@/lib/chat-types").MessageSegment[];
   truncated: boolean;
   onContinue: () => void;
   isEditing: boolean;
@@ -570,6 +573,7 @@ function MessageBlock({
   chatId,
   chatAgentMode,
   toolCalls,
+  segments,
   truncated,
   onContinue,
   isEditing,
@@ -653,6 +657,41 @@ function MessageBlock({
             // создастся новая ветка с этим текстом · прежняя сохранится
           </div>
         </div>
+      ) : segments.length > 0 ? (
+        // Interleaved-рендер: text → tool → text → tool → ... в порядке появления.
+        // Используется в агент-режиме где сегменты пишутся в БД во время стрима.
+        <div className={styles.msgBody} style={{ borderColor: roleColor }}>
+          {segments.map((seg, i) => {
+            if (seg.kind === "text") {
+              if (!seg.content) return null;
+              const isLastText =
+                msg.status === "streaming" &&
+                i === segments.length - 1 &&
+                seg.kind === "text";
+              return (
+                <div key={seg.id} style={{ whiteSpace: "normal" }}>
+                  <Markdown content={seg.content} />
+                  {isLastText && <span className={styles.caret} />}
+                </div>
+              );
+            }
+            // tool_call segment — рендерим тем же ToolCallBlock'ом
+            return (
+              <ToolCallBlock
+                key={seg.id}
+                call={{
+                  id: seg.id,
+                  name: seg.name,
+                  input: seg.input,
+                  output: seg.output ?? undefined,
+                  status: seg.status,
+                  is_present_files: seg.is_present_files,
+                }}
+                chatId={chatId}
+              />
+            );
+          })}
+        </div>
       ) : (
         <div
           className={styles.msgBody}
@@ -683,14 +722,19 @@ function MessageBlock({
         />
       )}
 
-      {/* tool calls (агент-режим: bash, read_file, present_files, ...) */}
-      {!isEditing && msg.role === "assistant" && toolCalls.length > 0 && (
-        <div className={styles.toolCalls}>
-          {toolCalls.map((call) => (
-            <ToolCallBlock key={call.id} call={call} chatId={chatId} />
-          ))}
-        </div>
-      )}
+      {/* tool calls «снизу единым блоком» — рендерим ТОЛЬКО для старых
+          сообщений без segments (до миграции 0007). Новые сообщения
+          рендерят tool-calls в составе segments выше. */}
+      {!isEditing &&
+        msg.role === "assistant" &&
+        segments.length === 0 &&
+        toolCalls.length > 0 && (
+          <div className={styles.toolCalls}>
+            {toolCalls.map((call) => (
+              <ToolCallBlock key={call.id} call={call} chatId={chatId} />
+            ))}
+          </div>
+        )}
 
       {/* Кнопка «продолжить» — если упёрлись в AGENT_MAX_TURNS */}
       {!isEditing &&

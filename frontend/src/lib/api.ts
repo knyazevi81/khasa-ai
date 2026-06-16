@@ -303,6 +303,52 @@ export const api = {
         }>;
       }>(`/chats/${chatId}/messages/${messageId}/subtasks`, { auth: true }),
 
+    /**
+     * Все сохранённые tool-calls чата, сгруппированные по message_id.
+     * Используется при загрузке чата чтобы восстановить блоки tool-call'ов
+     * под сообщениями (они исчезали после reload потому что в БД не лежали).
+     */
+    toolCalls: (chatId: string) =>
+      request<{
+        tool_calls: Record<
+          string,
+          Array<{
+            id: string;
+            name: string;
+            input: Record<string, any>;
+            output: string | null;
+            status: "running" | "done" | "error";
+            is_present_files: boolean;
+            order_idx: number;
+          }>
+        >;
+      }>(`/chats/${chatId}/tool-calls`, { auth: true }),
+
+    /**
+     * Сегменты сообщений (text + tool_call) с общим order_idx.
+     * Используется для interleaved-рендера, где tool-вызовы стоят между
+     * кусками текста в том порядке, в каком модель их сгенерировала.
+     */
+    segments: (chatId: string) =>
+      request<{
+        segments: Record<
+          string,
+          Array<
+            | { kind: "text"; order_idx: number; id: string; content: string }
+            | {
+                kind: "tool_call";
+                order_idx: number;
+                id: string;
+                name: string;
+                input: Record<string, any>;
+                output: string | null;
+                status: "running" | "done" | "error";
+                is_present_files: boolean;
+              }
+          >
+        >;
+      }>(`/chats/${chatId}/segments`, { auth: true }),
+
     // ── Артефакты ────────────────────────────────────────────────────────
     artifacts: (chatId: string) =>
       request<ArtifactListDTO>(`/chats/${chatId}/artifacts`, { auth: true }),

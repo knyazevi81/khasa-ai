@@ -367,3 +367,60 @@ class MCPServers(Base):
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     # Кэш списка инструментов (обновляется при validate)
     tools_cache: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+
+
+# ── Tool calls (persisted agent tool invocations) ────────────────────────────
+
+
+class ToolCalls(Base):
+    """
+    Сохранённый вызов tool агентом. Привязан к assistant-сообщению.
+    Нужен чтобы после reload страницы фронт мог восстановить блоки tool-call'ов
+    под сообщением — иначе они живут только в WS-стриме и теряются.
+
+    `order_idx` — последовательность в рамках одного assistant-сообщения
+    (модель часто делает несколько вызовов).
+    """
+    __tablename__ = "tool_calls"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    message_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("messages.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    order_idx: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    tool_use_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    input: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    output: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="running")
+    is_present_files: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+
+# ── Message text segments (interleaved with tool_calls) ──────────────────────
+
+
+class MessageTextSegments(Base):
+    """
+    Кусок текста ассистент-сообщения между двумя tool-call'ами (или до/после
+    них). `order_idx` — единый счётчик с tool_calls в рамках одного message_id:
+    при рендере фронт сортирует объединённый список по order_idx, получая
+    text → tool → text → tool → ... в правильной последовательности.
+    """
+    __tablename__ = "message_text_segments"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    message_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("messages.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    order_idx: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    content: Mapped[str] = mapped_column(Text, nullable=False, default="")

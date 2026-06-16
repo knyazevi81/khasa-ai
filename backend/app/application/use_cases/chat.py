@@ -6,6 +6,8 @@ import uuid
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 
+from sqlalchemy import update as sa_update
+
 from app.domain.exceptions.base import AppException, ForbiddenError
 from app.domain.interface.llm import AbstractLLMRouter
 from app.domain.models.chat import Chat, Message, MessageStatus
@@ -17,6 +19,9 @@ from app.domain.models.llm import (
     StreamEventType,
 )
 from app.application.use_cases.llm_credentials import LLMCredentialService
+from app.infrastructure.database.orm.models import (
+    MessageTextSegments as MessageTextSegmentsORM,
+)
 from app.infrastructure.database.uow import UnitOfWork
 
 logger_chat = logging.getLogger(__name__)
@@ -315,9 +320,31 @@ class ChatService:
         # покажем кнопку «продолжить».
         hit_tool_use_limit = False
 
+        # Глобальный счётчик order_idx — общий для text_segments и tool_calls.
+        # При рендере фронт мержит их и сортирует по этому полю.
+        # Передаём как dict чтобы _stream_single_pass мог мутировать (общий
+        # state — text сегмент закрывается на каждом tool_use внутри турна).
+        next_order_state = {"next": 0}
+
         try:
             for turn in range(max_turns):
-                # Один LLM-проход. Возвращает (text, tool_uses, usage, error).
+                # Перед каждым LLM-вызовом создаём пустой text-сегмент.
+                # Если в этом турне модель вызовет tools — _stream_single_pass
+                # сама закроет этот сегмент и откроет новый после каждого tool_use.
+                current_segment_id: uuid.UUID | None = None
+                current_segment_order: int = 0
+                if chat.agent_mode and tools:
+                    current_segment_id = uuid.uuid4()
+                    current_segment_order = next_order_state["next"]
+                    next_order_state["next"] = current_segment_order + 1
+                    await self.uow.text_segments.add(
+                        id=current_segment_id,
+                        message_id=assistant_msg_id,
+                        order_idx=current_segment_order,
+                        content="",
+                    )
+                    await self.uow.session.commit()
+
                 result = await self._stream_single_pass(
                     adapter=adapter,
                     credential=credential,
@@ -331,6 +358,9 @@ class ChatService:
                     assistant_msg_id=assistant_msg_id,
                     emitted_versions=emitted_versions,
                     is_first_turn=(turn == 0),
+                    segment_id=current_segment_id,
+                    segment_order=current_segment_order,
+                    next_order_state=next_order_state,
                 )
                 async for ev in result["events"]():
                     yield ev
@@ -364,8 +394,29 @@ class ChatService:
                 # Исполняем все tool_uses (последовательно — большинству агентов
                 # этого хватает, и проще логи разбирать)
                 tool_results: list[dict] = []
+
                 for tu in result["tool_uses"]:
-                    # Уведомим UI что начали
+                    # Создаём запись в БД с правильным order_idx.
+                    # __order_idx__ был назначен в _stream_single_pass когда
+                    # пришёл TOOL_USE event — он отражает реальный порядок
+                    # появления tool_use'а среди других сегментов.
+                    db_call_id = uuid.uuid4()
+                    tool_order = tu.get("__order_idx__", next_order_state["next"])
+                    if "__order_idx__" not in tu:
+                        next_order_state["next"] = tool_order + 1
+                    await self.uow.tool_calls.add(
+                        id=db_call_id,
+                        message_id=assistant_msg_id,
+                        order_idx=tool_order,
+                        tool_use_id=tu["id"],
+                        name=tu["name"],
+                        input=tu["input"] or {},
+                        output=None,
+                        status="running",
+                        is_present_files=False,
+                    )
+                    await self.uow.session.commit()
+
                     yield StreamEvent(
                         type=StreamEventType.TOOL_USE,
                         raw={
@@ -373,12 +424,23 @@ class ChatService:
                             "name": tu["name"],
                             "input": tu["input"],
                             "status": "running",
+                            "order_idx": tool_order,
                         },
                     )
                     tool_output = await self._execute_tool(
                         chat=chat, tool_use=tu
                     )
                     is_present_files = tool_output.startswith("__KHASA_PRESENT_FILES__")
+
+                    # Обновим запись результатом
+                    await self.uow.tool_calls.update_fields(
+                        db_call_id,
+                        output=tool_output,
+                        status="done",
+                        is_present_files=is_present_files,
+                    )
+                    await self.uow.session.commit()
+
                     yield StreamEvent(
                         type=StreamEventType.TOOL_RESULT,
                         raw={
@@ -386,6 +448,7 @@ class ChatService:
                             "name": tu["name"],
                             "output": tool_output,
                             "is_present_files": is_present_files,
+                            "order_idx": tool_order,
                         },
                     )
                     tool_results.append({
@@ -449,6 +512,9 @@ class ChatService:
         assistant_msg_id: uuid.UUID,
         emitted_versions: set[uuid.UUID],
         is_first_turn: bool,
+        segment_id: uuid.UUID | None = None,
+        segment_order: int = 0,
+        next_order_state: dict | None = None,
     ) -> dict:
         """
         Один LLM-вызов. Возвращает dict с:
@@ -481,16 +547,52 @@ class ChatService:
                 full_text_parts.append(event.text)
                 if not plan_parsed:
                     accumulated_for_plan.append(event.text)
-                    plan_parsed = await self._try_parse_plan(
+                    plan_parsed, plan_span = await self._try_parse_plan(
                         "".join(accumulated_for_plan),
                         assistant_msg_id=assistant_msg_id,
                     )
+                    # Если план распарсен и есть span — вырезаем JSON-блок
+                    # из видимого сегмента (мы записали его в БД до парсинга,
+                    # теперь чистим UPDATE'ом).
+                    if plan_parsed and plan_span and segment_id is not None:
+                        plan_text = "".join(accumulated_for_plan)
+                        before = plan_text[: plan_span[0]].rstrip()
+                        after = plan_text[plan_span[1]:].lstrip()
+                        cleaned = (before + ("\n\n" if before and after else "") + after).strip()
+                        await self.uow.session.execute(
+                            sa_update(MessageTextSegmentsORM)
+                            .where(MessageTextSegmentsORM.id == segment_id)
+                            .values(content=cleaned)
+                        )
+                        await self.uow.session.commit()
+                        buffer.clear()
+                        last_flush = 0
+                        full_text_parts = [cleaned]
+                        # Шлём фронту replace-event чтобы он переписал
+                        # содержимое сегмента целиком (вместо append).
+                        events_queue.append(StreamEvent(
+                            type=StreamEventType.DELTA,
+                            text="",
+                            raw={
+                                "segment_id": str(segment_id),
+                                "order_idx": segment_order,
+                                "replace": True,
+                                "content": cleaned,
+                            },
+                        ))
                 total_len = sum(len(b) for b in buffer)
                 if total_len - last_flush >= FLUSH_EVERY:
                     chunk = "".join(buffer)
-                    await self.uow.messages.append_content(
-                        assistant_msg_id, chunk
-                    )
+                    # Пишем в активный text-сегмент. Если сегмента нет —
+                    # значит это не агент-режим, юзаем старый messages.content.
+                    if segment_id is not None:
+                        await self.uow.text_segments.append_content(
+                            segment_id, chunk
+                        )
+                    else:
+                        await self.uow.messages.append_content(
+                            assistant_msg_id, chunk
+                        )
                     await self.uow.session.commit()
                     buffer.clear()
                     last_flush = 0
@@ -508,12 +610,63 @@ class ChatService:
                     ):
                         events_queue.append(ev)
 
-                events_queue.append(event)
+                # Прокидываем DELTA с информацией о сегменте — фронт по
+                # segment_id + order_idx понимает куда дописывать.
+                event_with_meta = StreamEvent(
+                    type=event.type,
+                    text=event.text,
+                    raw={
+                        "segment_id": str(segment_id) if segment_id else None,
+                        "order_idx": segment_order,
+                    },
+                )
+                events_queue.append(event_with_meta)
 
             elif event.type == StreamEventType.TOOL_USE:
-                # Адаптер собрал tool_use полностью — добавляем в список
+                # Адаптер собрал tool_use полностью. Делаем разбиение сегмента:
+                #   1. Допишем хвост буфера в текущий text-сегмент
+                #   2. Создаём tool_call в БД с next_order
+                #   3. Создаём НОВЫЙ text-сегмент для следующего текста (если будет)
+                #   4. Эмитим tool_use событие с order_idx
+                #
+                # Это даёт настоящий interleaved-рендер: даже если модель в
+                # одном LLM-ответе кладёт text → tool → tool → text → tool,
+                # каждый блок получает свой order_idx по порядку появления.
+                if buffer and segment_id is not None:
+                    await self.uow.text_segments.append_content(
+                        segment_id, "".join(buffer)
+                    )
+                    buffer.clear()
+                    last_flush = 0
                 if event.raw:
                     tool_uses.append(event.raw)
+                    # Запишем tool_call в БД немедленно, до его исполнения,
+                    # с правильным order_idx (между предыдущим текстом и
+                    # следующим). next_order_state — общий счётчик из outer.
+                    if next_order_state is not None and chat.agent_mode:
+                        tool_order = next_order_state["next"]
+                        next_order_state["next"] = tool_order + 1
+                        event.raw["__order_idx__"] = tool_order
+
+                        # Создаём новый text-сегмент для следующего текста.
+                        # Если потом не будет текста — сегмент останется пустым
+                        # и фронт его не отрисует.
+                        new_seg_id = uuid.uuid4()
+                        new_seg_order = next_order_state["next"]
+                        next_order_state["next"] = new_seg_order + 1
+                        await self.uow.text_segments.add(
+                            id=new_seg_id,
+                            message_id=assistant_msg_id,
+                            order_idx=new_seg_order,
+                            content="",
+                        )
+                        await self.uow.session.commit()
+                        # Переключаем активный сегмент. Это работает потому что
+                        # segment_id — локальная переменная функции, можно её
+                        # переопределить для последующих DELTA внутри этого
+                        # же turn'а.
+                        segment_id = new_seg_id
+                        segment_order = new_seg_order
                 events_queue.append(event)
 
             elif event.type == StreamEventType.ERROR:
@@ -533,9 +686,14 @@ class ChatService:
 
         # Доp- хвост буфера
         if buffer:
-            await self.uow.messages.append_content(
-                assistant_msg_id, "".join(buffer)
-            )
+            if segment_id is not None:
+                await self.uow.text_segments.append_content(
+                    segment_id, "".join(buffer)
+                )
+            else:
+                await self.uow.messages.append_content(
+                    assistant_msg_id, "".join(buffer)
+                )
             await self.uow.session.commit()
 
         # Финальный артефакт-скан
@@ -746,15 +904,19 @@ class ChatService:
         accumulated: str,
         *,
         assistant_msg_id: uuid.UUID,
-    ) -> bool:
+    ) -> tuple[bool, tuple[int, int] | None]:
         """
         Пытается выудить JSON-план из начала ответа агента.
-        Возвращает True если план распарсен (или явно не будет найден),
-        False — если стоит подождать ещё чанков.
+        Возвращает (parsed, span):
+          parsed — True если стоит прекратить попытки парсинга (план найден
+                   или явно не будет найден);
+          span   — (start, end) позиций JSON-блока в accumulated, если он
+                   был распарсен. Вызывающий может вырезать этот фрагмент
+                   из видимого текста сегмента.
         """
         # Ничего не пришло — ждём
         if len(accumulated) < 20:
-            return False
+            return False, None
 
         import json
         import re
@@ -762,26 +924,22 @@ class ChatService:
         # Ищем JSON-блок в ```json ... ``` или просто {"subtasks": [...]}
         block_match = re.search(r"```json\s*(\{.+?\})\s*```", accumulated, re.DOTALL)
         if not block_match:
-            # Не дождались закрывающего ```. Если уже накопилось много текста
-            # без даже открывающего ``` — план просто пропустили.
             if len(accumulated) > 1500 and "```" not in accumulated:
-                return True  # отказываемся ждать
-            # Может, без блока — попробуем найти inline
+                return True, None
             inline = re.search(r'(\{\s*"subtasks"\s*:\s*\[.+?\]\s*\})', accumulated, re.DOTALL)
             if not inline:
-                return False
+                return False, None
             block_match = inline
 
         try:
             data = json.loads(block_match.group(1))
         except json.JSONDecodeError:
-            return False
+            return False, None
 
         subtasks = data.get("subtasks") or []
         if not isinstance(subtasks, list):
-            return True
+            return True, None
 
-        # Создаём подзадачи в БД
         for i, title in enumerate(subtasks):
             if not isinstance(title, str):
                 continue
@@ -793,7 +951,9 @@ class ChatService:
                 status="pending",
             )
         await self.uow.session.commit()
-        return True
+        # Вернём span всего матча (с ```json ... ``` если был), чтобы
+        # вырезать из видимого текста.
+        return True, (block_match.start(), block_match.end())
 
     async def fork_from_message(
         self,

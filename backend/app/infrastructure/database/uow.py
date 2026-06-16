@@ -22,6 +22,10 @@ from app.infrastructure.database.repositories.sandboxes import SQLSandboxReposit
 from app.infrastructure.database.repositories.system_prompts import (
     SQLSystemPromptRepository,
 )
+from app.infrastructure.database.repositories.text_segments import (
+    SQLMessageTextSegmentRepository,
+)
+from app.infrastructure.database.repositories.tool_calls import SQLToolCallRepository
 from app.infrastructure.database.repositories.users import SQLUserRepository
 from app.infrastructure.database.repositories.verification_codes import (
     SQLVerificationCodeRepository,
@@ -43,6 +47,8 @@ class UnitOfWork(AbstractUnitOfWork):
     system_prompts: SQLSystemPromptRepository
     sandboxes: SQLSandboxRepository
     mcp_servers: SQLMCPServerRepository
+    tool_calls: SQLToolCallRepository
+    text_segments: SQLMessageTextSegmentRepository
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -60,6 +66,8 @@ class UnitOfWork(AbstractUnitOfWork):
         self.system_prompts = SQLSystemPromptRepository(self.session)
         self.sandboxes = SQLSandboxRepository(self.session)
         self.mcp_servers = SQLMCPServerRepository(self.session)
+        self.tool_calls = SQLToolCallRepository(self.session)
+        self.text_segments = SQLMessageTextSegmentRepository(self.session)
         return self
 
     async def __aexit__(self, exc_type, *args) -> None:

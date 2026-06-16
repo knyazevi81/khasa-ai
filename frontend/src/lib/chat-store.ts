@@ -7,6 +7,7 @@ import type {
   ArtifactPushDTO,
   ChatDTO,
   MessageDTO,
+  MessageSegment,
   ToolCallDTO,
   WSIncoming,
   WSOutgoing,
@@ -25,10 +26,11 @@ interface ChatState {
   // подписан на это поле и сам перечитывает деталь.
   lastArtifactPush: ArtifactPushDTO | null;
 
-  // Tool-calls группируются по message_id (то assistant-сообщение, в чьём
-  // стриме они появились). Это позволяет UI рендерить блоки tool'ов прямо
-  // под содержимым сообщения, в порядке появления.
+  // Сегменты ассистент-сообщений (text + tool_call в порядке появления).
+  // При стриме обновляются по WS, при reload — подтягиваются из /segments.
+  // Старый `toolCallsByMessage` остаётся для совместимости.
   toolCallsByMessage: Record<string, ToolCallDTO[]>;
+  segmentsByMessage: Record<string, MessageSegment[]>;
 
   // Сообщения которые упёрлись в AGENT_MAX_TURNS — фронт показывает у них
   // кнопку «продолжить» (отправляет новый user-msg «продолжай» и стримит
@@ -55,17 +57,22 @@ export const useChatStore = create<ChatState>((set, get) => ({
   ws: null,
   lastArtifactPush: null,
   toolCallsByMessage: {},
+  segmentsByMessage: {},
   truncatedMessages: new Set(),
 
   loadChat: async (id) => {
-    const [chat, msgList] = await Promise.all([
+    const [chat, msgList, toolCallsRes, segmentsRes] = await Promise.all([
       api.chats.get(id),
       api.chats.messages(id),
+      api.chats.toolCalls(id).catch(() => ({ tool_calls: {} as Record<string, ToolCallDTO[]> })),
+      api.chats.segments(id).catch(() => ({ segments: {} as Record<string, MessageSegment[]> })),
     ]);
     set({
       chat,
       messages: msgList.messages,
       currentMessageId: msgList.current_message_id,
+      toolCallsByMessage: toolCallsRes.tool_calls as Record<string, ToolCallDTO[]>,
+      segmentsByMessage: segmentsRes.segments as Record<string, MessageSegment[]>,
       error: null,
     });
   },
@@ -73,10 +80,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
   reloadMessages: async () => {
     const chat = get().chat;
     if (!chat) return;
-    const msgList = await api.chats.messages(chat.id);
+    const [msgList, toolCallsRes, segmentsRes] = await Promise.all([
+      api.chats.messages(chat.id),
+      api.chats.toolCalls(chat.id).catch(() => ({ tool_calls: {} as Record<string, ToolCallDTO[]> })),
+      api.chats.segments(chat.id).catch(() => ({ segments: {} as Record<string, MessageSegment[]> })),
+    ]);
     set({
       messages: msgList.messages,
       currentMessageId: msgList.current_message_id,
+      toolCallsByMessage: toolCallsRes.tool_calls as Record<string, ToolCallDTO[]>,
+      segmentsByMessage: segmentsRes.segments as Record<string, MessageSegment[]>,
     });
   },
 
@@ -128,7 +141,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({
       ws: null,
       lastArtifactPush: null,
-      toolCallsByMessage: {},
+      // Не сбрасываем toolCallsByMessage — они теперь персистятся в БД и
+      // подтянутся при следующем loadChat (или останутся актуальными если
+      // юзер просто закрыл вкладку с тем же чатом).
       truncatedMessages: new Set(),
     });
   },
@@ -228,13 +243,64 @@ function handleIncoming(
     }
 
     case "delta": {
-      set((s) => ({
-        messages: s.messages.map((m) =>
-          m.id === payload.message_id
-            ? { ...m, content: m.content + payload.text, status: "streaming" }
-            : m,
-        ),
-      }));
+      // В агент-режиме delta приходит с segment_id и order_idx — пишем в
+      // нужный сегмент. Это даёт interleaved-рендер «text → tool → text».
+      // В обычном режиме segment_id отсутствует — пишем в m.content по-старому.
+      if (payload.segment_id) {
+        const segId = payload.segment_id;
+        const order = payload.order_idx ?? 0;
+        // Спец-режим: бэк прислал replace=true с готовым контентом —
+        // это значит мы вырезали JSON-план или сделали другую правку.
+        // Фронт переписывает текст сегмента полностью.
+        const isReplace = (payload as any).replace === true;
+        const replaceContent = (payload as any).content as string | undefined;
+        set((s) => {
+          const msgId = payload.message_id;
+          const list = s.segmentsByMessage[msgId] || [];
+          const existing = list.find(
+            (seg) => seg.kind === "text" && seg.id === segId,
+          );
+          let next: MessageSegment[];
+          if (existing && existing.kind === "text") {
+            next = list.map((seg) =>
+              seg.kind === "text" && seg.id === segId
+                ? {
+                    ...seg,
+                    content: isReplace
+                      ? replaceContent ?? ""
+                      : seg.content + payload.text,
+                  }
+                : seg,
+            );
+          } else {
+            next = [
+              ...list,
+              {
+                kind: "text" as const,
+                order_idx: order,
+                id: segId,
+                content: isReplace ? replaceContent ?? "" : payload.text,
+              },
+            ];
+            next.sort((a, b) => a.order_idx - b.order_idx);
+          }
+          return {
+            segmentsByMessage: { ...s.segmentsByMessage, [msgId]: next },
+            messages: s.messages.map((m) =>
+              m.id === msgId ? { ...m, status: "streaming" } : m,
+            ),
+          };
+        });
+      } else {
+        // legacy / non-agent режим
+        set((s) => ({
+          messages: s.messages.map((m) =>
+            m.id === payload.message_id
+              ? { ...m, content: m.content + payload.text, status: "streaming" }
+              : m,
+          ),
+        }));
+      }
       break;
     }
 
@@ -276,16 +342,15 @@ function handleIncoming(
     }
 
     case "tool_use": {
-      // К какому сообщению привязать? К текущему стримящемуся —
-      // currentMessageId всегда указывает на последний assistant-узел
       const msgId = get().currentMessageId;
       if (!msgId) break;
+      const order = payload.order_idx ?? 0;
       set((s) => {
+        // 1) Старый toolCallsByMessage — для обратной совместимости
         const list = s.toolCallsByMessage[msgId] || [];
-        // Если такой id уже есть — обновим (возможно пришёл апдейт статуса)
         const existing = list.find((c) => c.id === payload.id);
         const status = (payload.status as ToolCallDTO["status"]) || "running";
-        const next: ToolCallDTO[] = existing
+        const nextCalls: ToolCallDTO[] = existing
           ? list.map((c) => (c.id === payload.id ? { ...c, status } : c))
           : [
               ...list,
@@ -296,8 +361,39 @@ function handleIncoming(
                 status,
               },
             ];
+
+        // 2) segmentsByMessage — апсёрт tool_call сегмента
+        const segList = s.segmentsByMessage[msgId] || [];
+        const existingSeg = segList.find(
+          (seg) => seg.kind === "tool_call" && seg.id === payload.id,
+        );
+        let nextSegs: MessageSegment[];
+        if (existingSeg) {
+          nextSegs = segList.map((seg) =>
+            seg.kind === "tool_call" && seg.id === payload.id
+              ? { ...seg, status }
+              : seg,
+          );
+        } else {
+          nextSegs = [
+            ...segList,
+            {
+              kind: "tool_call" as const,
+              order_idx: order,
+              id: payload.id,
+              name: payload.name,
+              input: payload.input,
+              output: null,
+              status,
+              is_present_files: false,
+            },
+          ];
+          nextSegs.sort((a, b) => a.order_idx - b.order_idx);
+        }
+
         return {
-          toolCallsByMessage: { ...s.toolCallsByMessage, [msgId]: next },
+          toolCallsByMessage: { ...s.toolCallsByMessage, [msgId]: nextCalls },
+          segmentsByMessage: { ...s.segmentsByMessage, [msgId]: nextSegs },
         };
       });
       break;
@@ -307,8 +403,9 @@ function handleIncoming(
       const msgId = get().currentMessageId;
       if (!msgId) break;
       set((s) => {
+        // Старый toolCallsByMessage
         const list = s.toolCallsByMessage[msgId] || [];
-        const next = list.map((c) =>
+        const nextCalls = list.map((c) =>
           c.id === payload.id
             ? {
                 ...c,
@@ -318,8 +415,21 @@ function handleIncoming(
               }
             : c,
         );
+        // segmentsByMessage — обновляем сегмент tool_call
+        const segList = s.segmentsByMessage[msgId] || [];
+        const nextSegs: MessageSegment[] = segList.map((seg) =>
+          seg.kind === "tool_call" && seg.id === payload.id
+            ? {
+                ...seg,
+                output: payload.output,
+                status: "done" as const,
+                is_present_files: payload.is_present_files ?? false,
+              }
+            : seg,
+        );
         return {
-          toolCallsByMessage: { ...s.toolCallsByMessage, [msgId]: next },
+          toolCallsByMessage: { ...s.toolCallsByMessage, [msgId]: nextCalls },
+          segmentsByMessage: { ...s.segmentsByMessage, [msgId]: nextSegs },
         };
       });
       break;

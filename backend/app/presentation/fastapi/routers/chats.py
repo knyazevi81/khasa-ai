@@ -173,6 +173,80 @@ async def list_messages(
     )
 
 
+@router.get("/{chat_id}/segments")
+async def list_message_segments(
+    chat_id: uuid.UUID,
+    current_user: Annotated[User, Depends(get_current_user)],
+    service: Annotated[ChatService, Depends(get_chat_service)],
+) -> dict:
+    """
+    Возвращает сегменты ассистент-сообщений (text-блоки и tool-call'ы)
+    с общим order_idx, сгруппированные по message_id. Фронт мержит и
+    рендерит "text → tool → text → tool → ..." по порядку.
+    """
+    await service.get_chat(chat_id, current_user.id)
+    msgs = await service.get_messages(chat_id, current_user.id)
+    msg_ids = [m.id for m in msgs]
+    calls = await service.uow.tool_calls.find_for_messages(msg_ids)
+    segments = await service.uow.text_segments.find_for_messages(msg_ids)
+
+    grouped: dict[str, list[dict]] = {}
+    for c in calls:
+        grouped.setdefault(str(c.message_id), []).append({
+            "kind": "tool_call",
+            "order_idx": c.order_idx,
+            "id": c.tool_use_id,
+            "name": c.name,
+            "input": c.input or {},
+            "output": c.output,
+            "status": c.status,
+            "is_present_files": c.is_present_files,
+        })
+    for s in segments:
+        grouped.setdefault(str(s.message_id), []).append({
+            "kind": "text",
+            "order_idx": s.order_idx,
+            "id": str(s.id),
+            "content": s.content,
+        })
+
+    # Сортируем каждую группу по order_idx
+    for msg_id in grouped:
+        grouped[msg_id].sort(key=lambda x: x["order_idx"])
+
+    return {"segments": grouped}
+
+
+@router.get("/{chat_id}/tool-calls")
+async def list_tool_calls(
+    chat_id: uuid.UUID,
+    current_user: Annotated[User, Depends(get_current_user)],
+    service: Annotated[ChatService, Depends(get_chat_service)],
+) -> dict:
+    """
+    Возвращает все сохранённые tool-calls этого чата сгруппированные по
+    message_id. Используется фронтом при загрузке страницы чата, чтобы
+    восстановить блоки tool-call'ов (которые при стриме шли через WS,
+    но не попадают в обычный messages-endpoint).
+    """
+    await service.get_chat(chat_id, current_user.id)
+    msgs = await service.get_messages(chat_id, current_user.id)
+    msg_ids = [m.id for m in msgs]
+    calls = await service.uow.tool_calls.find_for_messages(msg_ids)
+    grouped: dict[str, list[dict]] = {}
+    for c in calls:
+        grouped.setdefault(str(c.message_id), []).append({
+            "id": c.tool_use_id,
+            "name": c.name,
+            "input": c.input or {},
+            "output": c.output,
+            "status": c.status,
+            "is_present_files": c.is_present_files,
+            "order_idx": c.order_idx,
+        })
+    return {"tool_calls": grouped}
+
+
 @router.post("/{chat_id}/switch-branch", response_model=ChatResponse)
 async def switch_branch(
     chat_id: uuid.UUID,
@@ -506,14 +580,32 @@ async def chat_stream(
                             payload=msg,
                         )
                     except AppException as exc:
-                        await websocket.send_json(
-                            {"type": "error", "error": exc.message}
-                        )
+                        # Доменная ошибка — отдаём текст наружу. Сокет может
+                        # быть уже закрыт фронтом (юзер ушёл со страницы) —
+                        # ловим RuntimeError, не падаем.
+                        logger.info("ws AppException: %s", exc.message)
+                        try:
+                            await websocket.send_json(
+                                {"type": "error", "error": exc.message}
+                            )
+                        except (RuntimeError, WebSocketDisconnect):
+                            logger.debug("ws already closed, can't send error")
                     except Exception as exc:
-                        logger.exception("ws error: %s", exc)
-                        await websocket.send_json(
-                            {"type": "error", "error": "internal error"}
+                        # ВАЖНО: логируем ДО попытки отправить — на случай
+                        # если сокет уже закрыт и send упадёт сам, тогда
+                        # первичная ошибка теряется. logger.exception
+                        # запишет полный traceback.
+                        logger.exception(
+                            "ws handler crashed: %s: %s",
+                            type(exc).__name__,
+                            exc,
                         )
+                        try:
+                            await websocket.send_json(
+                                {"type": "error", "error": "internal error"}
+                            )
+                        except (RuntimeError, WebSocketDisconnect):
+                            logger.debug("ws already closed, can't send error")
 
             except WebSocketDisconnect:
                 logger.info("ws disconnect chat=%s user=%s", chat_id, user.id)
@@ -647,44 +739,64 @@ async def _handle_ws_message(
         await websocket.send_json({"type": "error", "error": f"unknown type: {kind}"})
 
 
+async def _safe_send(websocket: WebSocket, payload: dict) -> bool:
+    """
+    Безопасная отправка JSON через WebSocket. Если сокет уже закрыт
+    (юзер ушёл со страницы, обрыв сети) — возвращает False и не падает,
+    давая вызывающему понять что дальше слать бессмысленно.
+    """
+    try:
+        await websocket.send_json(payload)
+        return True
+    except (RuntimeError, WebSocketDisconnect):
+        return False
+
+
 async def _pump_stream(websocket, chat_service, chat, assistant_msg_id):
     async for event in chat_service.stream_assistant_response(
         chat=chat, assistant_msg_id=assistant_msg_id
     ):
         if event.type == StreamEventType.DELTA:
-            await websocket.send_json(
-                {"type": "delta", "message_id": str(assistant_msg_id), "text": event.text}
+            ok = await _safe_send(
+                websocket,
+                {
+                    "type": "delta",
+                    "message_id": str(assistant_msg_id),
+                    "text": event.text,
+                    # segment_id / order_idx — для interleaved-рендера
+                    **(event.raw or {}),
+                },
             )
         elif event.type == StreamEventType.ARTIFACT:
-            await websocket.send_json(
-                {"type": "artifact", "artifact": event.raw}
-            )
+            ok = await _safe_send(websocket, {"type": "artifact", "artifact": event.raw})
         elif event.type == StreamEventType.TOOL_USE:
-            await websocket.send_json(
-                {"type": "tool_use", **(event.raw or {})}
-            )
+            ok = await _safe_send(websocket, {"type": "tool_use", **(event.raw or {})})
         elif event.type == StreamEventType.TOOL_RESULT:
-            await websocket.send_json(
-                {"type": "tool_result", **(event.raw or {})}
-            )
+            ok = await _safe_send(websocket, {"type": "tool_result", **(event.raw or {})})
         elif event.type == StreamEventType.TRUNCATED:
-            await websocket.send_json(
-                {"type": "truncated", **(event.raw or {})}
-            )
+            ok = await _safe_send(websocket, {"type": "truncated", **(event.raw or {})})
         elif event.type == StreamEventType.DONE:
             payload = {"type": "done", "message_id": str(assistant_msg_id)}
             if event.usage:
                 payload["usage"] = event.usage.model_dump()
-            await websocket.send_json(payload)
+            ok = await _safe_send(websocket, payload)
         elif event.type == StreamEventType.ERROR:
-            await websocket.send_json(
+            ok = await _safe_send(
+                websocket,
                 {
                     "type": "error",
                     "message_id": str(assistant_msg_id),
                     "error": event.error,
-                }
+                },
             )
-        # START — служебное, фронту не нужно
+        else:
+            ok = True  # START — служебное, фронту не нужно
+
+        # Если сокет умер — генератор сам прервётся при следующей итерации
+        # ChatService через CancelledError. Но мы можем выйти явно, чтобы не
+        # ждать ещё одного цикла стрима.
+        if not ok:
+            return
 
 
 # ── filename helpers (RFC 5987 для unicode-имён файлов) ──────────────────────
